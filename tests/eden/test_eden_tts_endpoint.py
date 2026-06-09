@@ -27,3 +27,11 @@ def test_eden_tts_empty_text_400():
     client, token = _client_and_token()
     r = client.post(f"/api/eden/tts?token={token}", json={"text": "  "})
     assert r.status_code == 400
+
+def test_eden_tts_failure_returns_500():
+    import hermes_cli.web_server as ws  # noqa: F401
+    client, token = _client_and_token()
+    fail_json = '{"success": false, "error": "no provider"}'
+    with mock.patch("tools.tts_tool.text_to_speech_tool", return_value=fail_json):
+        r = client.post(f"/api/eden/tts?token={token}", json={"text": "x"})
+    assert r.status_code == 500

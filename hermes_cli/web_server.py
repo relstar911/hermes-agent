@@ -3560,7 +3560,18 @@ def mount_eden(application: FastAPI):
                 {"error": data.get("error", "tts failed")}, status_code=500
             )
         file_path = Path(data.get("file_path") or out_path)
-        audio = file_path.read_bytes()
+
+        def _read_and_cleanup() -> bytes:
+            try:
+                return file_path.read_bytes()
+            finally:
+                for p in {file_path, out_path}:
+                    try:
+                        p.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+        audio = await run_in_threadpool(_read_and_cleanup)
         return Response(
             content=audio,
             media_type="audio/mpeg",
