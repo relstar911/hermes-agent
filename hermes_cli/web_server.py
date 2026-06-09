@@ -18,6 +18,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -119,6 +120,11 @@ _PUBLIC_API_PATHS: frozenset = frozenset({
     "/api/dashboard/themes",
     "/api/dashboard/plugins",
     "/api/dashboard/plugins/rescan",
+    # EDEN TTS validates the session token itself (query-param OR header,
+    # mirroring the WS endpoint) so the SPA can fetch audio with the same
+    # token-passing convention. Exempt from the header-only auth middleware;
+    # the endpoint still returns 401 on a missing/invalid token.
+    "/api/eden/tts",
 })
 
 
@@ -3509,6 +3515,99 @@ def _normalise_prefix(raw: Optional[str]) -> str:
     return p
 
 
+_eden_log = logging.getLogger("hermes.eden")
+
+EDEN_DIST = (
+    Path(os.environ["HERMES_EDEN_DIST"])
+    if "HERMES_EDEN_DIST" in os.environ
+    else Path(__file__).parent / "eden_dist"
+)
+
+
+def mount_eden(application: FastAPI):
+    """Register the EDEN TTS endpoint and (if built) the /eden SPA.
+
+    Must be called BEFORE mount_spa(), which owns the root catch-all route.
+    Same origin as /api/ws, so the session token + WS need no CORS handling.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    @application.post("/api/eden/tts")
+    async def eden_tts(request: Request):
+        token = request.query_params.get("token", "") or request.headers.get(
+            "x-hermes-session-token", ""
+        )
+        if not hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        text = (body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "text required"}, status_code=400)
+        from tools.tts_tool import text_to_speech_tool
+
+        out_path = Path(tempfile.gettempdir()) / f"eden_tts_{secrets.token_hex(8)}.mp3"
+        raw = await run_in_threadpool(text_to_speech_tool, text, str(out_path))
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {"success": False, "error": "tts returned non-JSON"}
+        if not data.get("success"):
+            _eden_log.warning("EDEN TTS failed: %s", data.get("error"))
+            return JSONResponse(
+                {"error": data.get("error", "tts failed")}, status_code=500
+            )
+        file_path = Path(data.get("file_path") or out_path)
+        audio = file_path.read_bytes()
+        return Response(
+            content=audio,
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    # Static SPA mount (only if built).
+    if not EDEN_DIST.exists():
+        _eden_log.warning("EDEN SPA not built. Run: cd eden && npm run build")
+        return
+
+    _eden_index = EDEN_DIST / "index.html"
+
+    def _serve_eden_index():
+        html = _eden_index.read_text()
+        token_script = (
+            f'<script>window.__HERMES_SESSION_TOKEN__="{_SESSION_TOKEN}";'
+            f'window.__HERMES_BASE_PATH__="";</script>'
+        )
+        html = html.replace("</head>", f"{token_script}</head>", 1)
+        return HTMLResponse(
+            html, headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+        )
+
+    application.mount(
+        "/eden/assets",
+        StaticFiles(directory=EDEN_DIST / "assets"),
+        name="eden-assets",
+    )
+
+    @application.get("/eden")
+    async def eden_root():
+        return _serve_eden_index()
+
+    @application.get("/eden/{full_path:path}")
+    async def serve_eden(full_path: str):
+        file_path = EDEN_DIST / full_path
+        if (
+            full_path
+            and file_path.resolve().is_relative_to(EDEN_DIST.resolve())
+            and file_path.exists()
+            and file_path.is_file()
+        ):
+            return FileResponse(file_path)
+        return _serve_eden_index()
+
+
 def mount_spa(application: FastAPI):
     """Mount the built SPA. Falls back to index.html for client-side routing.
 
@@ -4365,7 +4464,8 @@ def _mount_plugin_api_routes():
 # Mount plugin API routes before the SPA catch-all.
 _mount_plugin_api_routes()
 
-mount_spa(app)
+mount_eden(app)   # NEW: register /api/eden/tts and /eden BEFORE the catch-all
+mount_spa(app)    # keeps the root catch-all last
 
 
 def start_server(
