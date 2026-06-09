@@ -73,3 +73,6 @@ models-dev-upstream/
 hermes_cli/tui_dist/*
 hermes_cli/scripts/
 docs/superpowers/*
+
+# Brainstorming visual-companion mockups (local only)
+.superpowers/
