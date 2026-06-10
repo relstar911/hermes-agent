@@ -28,12 +28,14 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
   // user gesture — the push-to-talk pointerdown calls this.
   const prime = useCallback(() => {
     const ctx = ensureCtx();
-    if (ctx.state === "suspended") void ctx.resume();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
   }, [ensureCtx]);
 
   useEffect(() => {
     return () => {
       genRef.current++;
+      queueRef.current = [];
+      currentAudioRef.current?.pause();
       ctxRef.current?.close().catch(() => {});
       ctxRef.current = null;
     };
@@ -51,7 +53,7 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
 
   const playUrl = useCallback((url: string, gen: number): Promise<void> => {
     const ctx = ensureCtx();
-    if (ctx.state === "suspended") void ctx.resume();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
 
     const audio = new Audio(url);
     currentAudioRef.current = audio;
@@ -88,7 +90,7 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
             setTimeout(() => rej(new Error("audio blocked by autoplay policy")), 1500),
           );
           Promise.race([ctx.resume(), blocked]).then(
-            () => { raf = requestAnimationFrame(tick); },
+            () => { if (gen === genRef.current) raf = requestAnimationFrame(tick); },
             (err) => { cleanup(); reject(err); },
           );
           return;
@@ -122,7 +124,11 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
         prefetch = null;
         // prefetch the next chunk while this one plays
         const nextText = queueRef.current.shift();
-        if (nextText !== undefined) prefetch = synth(nextText);
+        if (nextText !== undefined) {
+          const p = synth(nextText);
+          p.catch(() => {}); // backstop: real handling happens when drain awaits p
+          prefetch = p;
+        }
         if (gen !== genRef.current) { URL.revokeObjectURL(url); break; }
         await playUrl(url, gen);
       }
@@ -135,8 +141,9 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
       drainingRef.current = false;
       amplitudeRef.current = 0;
       setSpeaking(false);
-      // sentences enqueued while we were tearing down: restart
-      if (queueRef.current.length && genRef.current === gen) void drain();
+      // sentences enqueued while we were tearing down: restart. stop()
+      // cleared the queue, so anything present is new-generation work.
+      if (queueRef.current.length) void drain();
     }
   }, [synth, playUrl]);
 
