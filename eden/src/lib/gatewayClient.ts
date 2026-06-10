@@ -19,13 +19,18 @@ import type {
   GatewayEventName,
 } from "./gatewayTypes";
 
-/**
- * Base path the Hermes dashboard mounts under. Injected by the host page as a
- * window global when EDEN is served from the dashboard; empty string (same
- * origin root) otherwise.
- */
-const HERMES_BASE_PATH: string =
-  (typeof window !== "undefined" && (window as any).__HERMES_BASE_PATH__) || "";
+// Mirrors web/src/lib/api.ts readBasePath(): normalize the injected base path
+// (guarantee a leading slash, strip any trailing slashes) before it is
+// concatenated into the WS URL. The backend currently injects "" for /eden,
+// but normalizing keeps this faithful to the original if a prefix is ever set.
+function readBasePath(): string {
+  if (typeof window === "undefined") return "";
+  const raw = window.__HERMES_BASE_PATH__ ?? "";
+  if (!raw) return "";
+  const withLead = raw.startsWith("/") ? raw : `/${raw}`;
+  return withLead.replace(/\/+$/, "");
+}
+const HERMES_BASE_PATH = readBasePath();
 
 export type { ConnectionState, GatewayEvent, GatewayEventName };
 
