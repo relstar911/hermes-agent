@@ -79,3 +79,7 @@ html, body {
   position: fixed; bottom: 84px; left: 0; right: 0; text-align: center; z-index: 4;
   font: 400 15px/1.4 Inter, system-ui, sans-serif; color: #9fe7ff; opacity: .85; pointer-events: none; padding: 0 8vw;
 }
+
+/* ---- error / system transcript lines ---- */
+.transcript .line.system .who { color: #ffb4b4; }
+.transcript .line.system .txt { color: #ffd2d2; opacity: .95; }

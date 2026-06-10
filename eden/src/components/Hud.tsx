@@ -1,7 +1,9 @@
 import { t, type Lang } from "../lib/i18n";
 import type { SphereState } from "../lib/sphereState";
 
-type Msg = { role: "user" | "eden"; text: string };
+type Msg = { id: number; role: "user" | "eden" | "system"; text: string };
+
+const WHO: Record<Msg["role"], string> = { user: "DU", eden: "EDEN", system: "SYS" };
 
 export function Hud({
   lang,
@@ -35,9 +37,9 @@ export function Hud({
       <div className="corner br">PWR&nbsp;<span>98%</span><br />NET&nbsp;<span>NOMINAL</span></div>
 
       <div className="transcript">
-        {transcript.slice(-6).map((m, i) => (
-          <div key={i} className={`line ${m.role}`}>
-            <span className="who">{m.role === "user" ? "DU" : "EDEN"}</span>
+        {transcript.slice(-6).map((m) => (
+          <div key={m.id} className={`line ${m.role}`}>
+            <span className="who">{WHO[m.role]}</span>
             <span className="txt">{m.text}</span>
           </div>
         ))}
@@ -57,6 +59,7 @@ export function Hud({
           onPointerDown={onPttDown}
           onPointerUp={onPttUp}
           onPointerLeave={onPttUp}
+          onPointerCancel={onPttUp}
         >
           {sttSupported ? `🎙 ${t(lang, "ptt")}` : lang === "de" ? "STT nicht verfügbar" : "STT unavailable"}
         </button>
