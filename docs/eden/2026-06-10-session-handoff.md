@@ -255,7 +255,11 @@ A 6-dimension review (backend, data-flow, React hygiene, build/deploy, voice Web
 `hermes mcp list`: **filesystem** (14 tools, stdio via global `mcp-server-filesystem`), **higgsfield** (35 tools, hosted OAuth), **notion** (14 tools, hosted OAuth) — all ✓ enabled; tool discovery worked without interactive login (first real call may still pop OAuth consent). Chrome CDP was already configured (`browser.cdp_url: http://127.0.0.1:9222`; start Chrome with `--remote-debugging-port=9222` when needed). **Still user-blocked:** GitHub MCP (needs PAT), web search (needs TAVILY/FIRECRAWL/EXA key).
 Note: `hermes mcp add` is interactive (confirm prompts) — pipe `"y" |` when scripting.
 
-### ⛔ THE one remaining blocker: OpenRouter 401 "User not found"
+### ✅ RESOLVED (2026-06-10, late): OpenRouter key replaced & verified
+User supplied a new key (repo `.env` → synced into `~/.hermes/.env`, which takes precedence per `hermes_cli/env_loader.py`). Validated: `GET /api/v1/auth/key` → 200, paid tier. Full live turn now green: `ws_smoke.mjs` → reply **"PONG"** with real `message.delta`/`reasoning.delta` streaming. **Nothing blocks §9 anymore — open `http://127.0.0.1:9119/eden` and speak.**
+Note: `~/.hermes/.env` ALWAYS wins over the repo `.env` (project file only fills missing values) — edit the user file, not the repo file. Commented `ELEVENLABS_API_KEY`/`TAVILY_API_KEY` placeholders were appended there.
+
+### ~~⛔ THE one remaining blocker~~ (historical): OpenRouter 401 "User not found"
 The key in `~/.hermes/.env` is rejected by OpenRouter's own auth endpoint (`GET /api/v1/auth/key` → 401). This is account-side: key revoked/deleted or account issue — check https://openrouter.ai/settings/keys and replace `OPENROUTER_API_KEY`. (`hermes doctor` only checks key *presence*, not validity — don't trust its green for this.) Until fixed, agent turns return the 401 text as a spoken message (graceful — verified live; the gateway emits **no** top-level `error` event on provider failure, the error text arrives as a normal `message.complete`).
 
 ### What §9 (human voice smoke) needs now
