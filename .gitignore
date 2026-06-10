@@ -76,3 +76,6 @@ docs/superpowers/*
 
 # Brainstorming visual-companion mockups (local only)
 .superpowers/
+
+# EDEN SPA build output
+hermes_cli/eden_dist/
