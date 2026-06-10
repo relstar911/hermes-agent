@@ -13,7 +13,9 @@ export function Sphere({ state, amplitudeRef }: { state: SphereState; amplitudeR
   useEffect(() => {
     const cv = canvasRef.current!;
     const ctx = cv.getContext("2d")!;
-    const DPR = Math.min(window.devicePixelRatio || 1, 2);
+    // 1.5 instead of 2: at full-screen the canvas pixel count dominates frame
+    // cost; the glow aesthetic hides the lower density completely.
+    const DPR = Math.min(window.devicePixelRatio || 1, 1.5);
     let W = 0, H = 0, cx = 0, cy = 0;
     const resize = () => {
       W = cv.clientWidth; H = cv.clientHeight;
@@ -42,6 +44,33 @@ export function Sphere({ state, amplitudeRef }: { state: SphereState; amplitudeR
       return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
     };
 
+    // Pre-rendered glow sprites replace per-node shadowBlur (the single most
+    // expensive Canvas2D operation): one drawImage per node instead of a
+    // blurred arc. One sprite per accent color (idle/tool/error).
+    const makeSprite = (accent: number[]) => {
+      const s = document.createElement("canvas");
+      const S = 64;
+      s.width = S; s.height = S;
+      const g = s.getContext("2d")!;
+      const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      grad.addColorStop(0, `rgba(${PAL.node[0]},${PAL.node[1]},${PAL.node[2]},1)`);
+      grad.addColorStop(0.22, `rgba(${accent[0]},${accent[1]},${accent[2]},0.5)`);
+      grad.addColorStop(1, `rgba(${accent[0]},${accent[1]},${accent[2]},0)`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, S, S);
+      return s;
+    };
+    const sprites = {
+      base: makeSprite(PAL.acc),
+      tool: makeSprite([124, 255, 178]),
+      error: makeSprite([255, 120, 120]),
+    };
+
+    // Links are stroked in a few alpha-bucketed Path2D batches instead of
+    // ~1200 individual stroke() calls with per-link rgba template strings.
+    const LINK_BUCKETS = 8;
+    const LINK_ALPHA_MAX = 0.7;
+
     let ry = 0, rx = -0.32, t = 0, raf = 0, lastTs = performance.now();
     const focal = 2.4;
 
@@ -57,7 +86,6 @@ export function Sphere({ state, amplitudeRef }: { state: SphereState; amplitudeR
       const breathe = 1 + 0.028 * Math.sin(t * 1.6);
       const pulse = breathe * (1 + 0.16 * energy * (0.6 + 0.4 * Math.sin(t * 22)));
       const R = Math.min(W, H) * 0.30 * pulse;
-      const accent = st === "tool" ? [124, 255, 178] : st === "error" ? [255, 120, 120] : PAL.acc;
 
       ctx.clearRect(0, 0, W, H);
       ctx.globalCompositeOperation = "lighter";
@@ -80,24 +108,32 @@ export function Sphere({ state, amplitudeRef }: { state: SphereState; amplitudeR
       }
 
       ctx.lineWidth = 1;
+      ctx.strokeStyle = `rgb(${PAL.link})`;
+      const buckets: Path2D[] = new Array(LINK_BUCKETS);
       for (const [i, j, w] of links) {
         const a = P[i], b = P[j];
         const dep = (a.z + b.z) * 0.5;
         const al = (0.06 + 0.5 * w) * (0.35 + 0.65 * (dep + 1) / 2) * (0.7 + 0.5 * energy);
-        ctx.strokeStyle = `rgba(${PAL.link},${al.toFixed(3)})`;
-        ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy); ctx.stroke();
+        const bi = Math.min(LINK_BUCKETS - 1, (al / LINK_ALPHA_MAX * LINK_BUCKETS) | 0);
+        (buckets[bi] ??= new Path2D()).moveTo(a.sx, a.sy);
+        buckets[bi].lineTo(b.sx, b.sy);
+      }
+      for (let bi = 0; bi < LINK_BUCKETS; bi++) {
+        if (!buckets[bi]) continue;
+        ctx.globalAlpha = ((bi + 0.5) / LINK_BUCKETS) * LINK_ALPHA_MAX;
+        ctx.stroke(buckets[bi]);
       }
 
-      const order = P.map((_, i) => i).sort((a, b) => P[a].z - P[b].z);
-      for (const i of order) {
+      // "lighter" compositing is order-independent — no z-sort needed.
+      const sprite = st === "tool" ? sprites.tool : st === "error" ? sprites.error : sprites.base;
+      for (let i = 0; i < N; i++) {
         const p = P[i], dep = (p.z + 1) / 2, tw = 0.7 + 0.3 * Math.sin(t * 3 + p.tw);
         const r = (0.6 + p.sz * 1.7) * p.persp * (0.6 + 0.7 * dep) * tw * (1 + 0.5 * energy * dep);
-        const a = (0.18 + 0.82 * dep) * tw;
-        ctx.fillStyle = `rgba(${PAL.node[0]},${PAL.node[1]},${PAL.node[2]},${a.toFixed(3)})`;
-        ctx.shadowBlur = 10 * dep; ctx.shadowColor = `rgba(${accent[0]},${accent[1]},${accent[2]},0.9)`;
-        ctx.beginPath(); ctx.arc(p.sx, p.sy, Math.max(0.4, r), 0, 6.2832); ctx.fill();
+        const d = Math.max(0.4, r) * 4; // sprite spans the former glow halo
+        ctx.globalAlpha = (0.18 + 0.82 * dep) * tw;
+        ctx.drawImage(sprite, p.sx - d / 2, p.sy - d / 2, d, d);
       }
-      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
 
       const cd = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.22 * pulse);
       cd.addColorStop(0, hex(PAL.core[0], 1));
