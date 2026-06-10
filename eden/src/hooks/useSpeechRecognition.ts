@@ -5,7 +5,11 @@ type Rec = any;
 const SR: any =
   (typeof window !== "undefined" && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
 
-export function useSpeechRecognition(lang: Lang, onFinal: (text: string) => void) {
+export function useSpeechRecognition(
+  lang: Lang,
+  onFinal: (text: string) => void,
+  onError?: (code: string) => void,
+) {
   const [supported] = useState<boolean>(!!SR);
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
@@ -28,10 +32,10 @@ export function useSpeechRecognition(lang: Lang, onFinal: (text: string) => void
       if (finalText.trim()) onFinal(finalText.trim());
     };
     rec.onend = () => { setListening(false); setInterim(""); };
-    rec.onerror = () => { setListening(false); };
+    rec.onerror = (e: any) => { setListening(false); onError?.(e?.error ?? "unknown"); };
     recRef.current = rec;
     return () => { try { rec.abort(); } catch { /* ignore */ } };
-  }, [lang, onFinal]);
+  }, [lang, onFinal, onError]);
 
   const start = () => { if (recRef.current && !listening) { try { recRef.current.start(); setListening(true); } catch { /* ignore */ } } };
   const stop = () => { if (recRef.current && listening) { try { recRef.current.stop(); } catch { /* ignore */ } } };

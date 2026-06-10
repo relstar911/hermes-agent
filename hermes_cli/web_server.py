@@ -3524,11 +3524,26 @@ EDEN_DIST = (
 )
 
 
+# tts_tool providers emit different containers (edge falls back to Ogg/Opus
+# when ffmpeg is missing); the Content-Type must follow the actual file.
+_EDEN_AUDIO_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/wav",
+    ".aac": "audio/aac",
+    ".m4a": "audio/mp4",
+    ".webm": "audio/webm",
+}
+
+
 def mount_eden(application: FastAPI):
     """Register the EDEN TTS endpoint and (if built) the /eden SPA.
 
     Must be called BEFORE mount_spa(), which owns the root catch-all route.
     Same origin as /api/ws, so the session token + WS need no CORS handling.
+    v1 scope: /eden is served same-origin only — path-prefix reverse proxies
+    (X-Forwarded-Prefix) are NOT supported here, unlike mount_spa.
     """
     from starlette.concurrency import run_in_threadpool
 
@@ -3572,9 +3587,10 @@ def mount_eden(application: FastAPI):
                         pass
 
         audio = await run_in_threadpool(_read_and_cleanup)
+        media_type = _EDEN_AUDIO_TYPES.get(file_path.suffix.lower(), "audio/mpeg")
         return Response(
             content=audio,
-            media_type="audio/mpeg",
+            media_type=media_type,
             headers={"Cache-Control": "no-store"},
         )
 
@@ -3596,11 +3612,14 @@ def mount_eden(application: FastAPI):
             html, headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
         )
 
-    application.mount(
-        "/eden/assets",
-        StaticFiles(directory=EDEN_DIST / "assets"),
-        name="eden-assets",
-    )
+    # Guarded: a build that emits index.html without assets/ must not crash
+    # server startup (StaticFiles raises if the directory is missing).
+    if (EDEN_DIST / "assets").is_dir():
+        application.mount(
+            "/eden/assets",
+            StaticFiles(directory=EDEN_DIST / "assets"),
+            name="eden-assets",
+        )
 
     @application.get("/eden")
     async def eden_root():

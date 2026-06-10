@@ -16,9 +16,13 @@ export function nextSphereState(current: SphereState, ev: GatewayEvent): SphereS
     case "tool.complete":
       return (ev as any).payload?.error ? "error" : "thinking";
     case "message.delta":
-      return "speaking";
+      // Text streaming is still generation; the TTS playback flag (not the
+      // reducer) owns the speaking visual once audio actually plays.
+      return "thinking";
     case "message.complete":
       return "idle";
+    case "error":
+      return "error";
     default:
       return current;
   }

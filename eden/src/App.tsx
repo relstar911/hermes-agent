@@ -15,14 +15,14 @@ export default function App() {
   const [lang, setLang] = useState<Lang>("de");
   const [state, setState] = useState<SphereState>("idle");
   const [transcript, setTranscript] = useState<Msg[]>([]);
-  const [, force] = useState(0);
+  const [ready, setReady] = useState(false);
   const gwRef = useRef<GatewayClient | null>(null);
   const sessionRef = useRef<string | null>(null);
   const assistantBuf = useRef("");
   const msgId = useRef(0);
   const langRef = useRef<Lang>(lang);
   langRef.current = lang;
-  const { speak, speaking, amplitudeRef } = useTtsPlayback();
+  const { speak, speaking, amplitudeRef, prime } = useTtsPlayback();
 
   const addMsg = useCallback((role: Msg["role"], text: string) => {
     setTranscript((tr) => [...tr, { id: msgId.current++, role, text }]);
@@ -33,21 +33,20 @@ export default function App() {
     addMsg("system", "⚠ " + message);
   }, [addMsg]);
 
-  // Re-render each frame while speaking so the sphere reads live amplitude.
-  useEffect(() => {
-    if (!speaking) return;
-    let raf = 0;
-    const loop = () => { force((n) => n + 1); raf = requestAnimationFrame(loop); };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [speaking]);
-
   useEffect(() => {
     const gw = new GatewayClient();
     gwRef.current = gw;
     const isCurrent = () => gwRef.current === gw;
     gw.onAny((ev: GatewayEvent) => {
       if (!isCurrent()) return;
+      if (ev.type === "error") {
+        // Server-side turn failure (provider down, rate limit, tool crash):
+        // no message.complete will follow — recover here instead of freezing.
+        assistantBuf.current = "";
+        const detail = String((ev as any).payload?.message ?? (ev as any).payload?.error ?? "");
+        fail((langRef.current === "de" ? "Agent-Fehler. " : "Agent error. ") + detail);
+        return;
+      }
       setState((s) => nextSphereState(s, ev));
       if (ev.type === "message.delta") assistantBuf.current += (ev as any).payload?.text ?? "";
       if (ev.type === "tool.complete" && (ev as any).payload?.error) {
@@ -65,7 +64,10 @@ export default function App() {
     (async () => {
       await gw.connect();
       const res = await gw.request<{ session_id: string }>("session.create", { cols: 80 });
-      if (isCurrent()) sessionRef.current = res.session_id;
+      if (isCurrent()) {
+        sessionRef.current = res.session_id;
+        setReady(true);
+      }
     })().catch(() => {
       if (isCurrent()) fail(langRef.current === "de" ? "Verbindung zum Agenten fehlgeschlagen." : "Connection to agent failed.");
     });
@@ -73,22 +75,40 @@ export default function App() {
   }, [speak, addMsg, fail]);
 
   const submit = useCallback((text: string) => {
+    if (!gwRef.current || !sessionRef.current) {
+      fail(langRef.current === "de" ? "Sitzung noch nicht bereit — einen Moment." : "Session not ready yet — one moment.");
+      return;
+    }
     addMsg("user", text);
     setState("thinking");
     gwRef.current
-      ?.request("prompt.submit", { session_id: sessionRef.current, text })
+      .request("prompt.submit", { session_id: sessionRef.current, text })
       .catch(() => fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."));
   }, [addMsg, fail]);
 
-  const stt = useSpeechRecognition(lang, submit);
-  const displayState: SphereState = speaking ? "speaking" : state;
-  const statusText = useMemo(() => t(lang, speaking ? "speaking" : state), [lang, state, speaking]);
+  const onMicError = useCallback((code: string) => {
+    // 'no-speech'/'aborted' are normal push-to-talk outcomes; only a denied
+    // microphone deserves the error treatment.
+    if (code === "not-allowed" || code === "service-not-allowed") {
+      fail(langRef.current === "de" ? "Mikrofonzugriff verweigert." : "Microphone access denied.");
+    }
+  }, [fail]);
+
+  const stt = useSpeechRecognition(lang, submit, onMicError);
+
+  const onPttDown = useCallback(() => {
+    prime(); // unlock the AudioContext on the user gesture (Chrome autoplay policy)
+    stt.start();
+  }, [prime, stt.start]);
+
+  const displayState: SphereState = speaking ? "speaking" : stt.listening ? "listening" : state;
+  const statusText = useMemo(() => t(lang, displayState), [lang, displayState]);
 
   return (
     <>
       <div className="bg" />
       <div className="grid" />
-      <Sphere state={displayState} amplitude={amplitudeRef.current} />
+      <Sphere state={displayState} amplitudeRef={amplitudeRef} />
       <Hud
         lang={lang}
         setLang={setLang}
@@ -96,7 +116,8 @@ export default function App() {
         statusText={statusText}
         transcript={transcript}
         sttSupported={stt.supported}
-        onPttDown={stt.start}
+        pttReady={ready}
+        onPttDown={onPttDown}
         onPttUp={stt.stop}
       />
       {stt.listening && <div className="ptt-interim">{stt.interim}</div>}

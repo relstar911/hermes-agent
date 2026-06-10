@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { rmsFromTimeDomain } from "../lib/amplitude";
 
 const token = () => (typeof window !== "undefined" && (window as any).__HERMES_SESSION_TOKEN__) || "";
@@ -7,7 +7,28 @@ export function useTtsPlayback() {
   const [speaking, setSpeaking] = useState(false);
   const amplitudeRef = useRef(0);
   const ctxRef = useRef<AudioContext | null>(null);
-  const rafRef = useRef(0);
+
+  const ensureCtx = useCallback((): AudioContext => {
+    return (ctxRef.current ??= new (window.AudioContext ||
+      (window as any).webkitAudioContext)());
+  }, []);
+
+  // Chrome's autoplay policy only lets an AudioContext start/resume from a
+  // user gesture. speak() runs from a WebSocket callback (no gesture), so the
+  // push-to-talk pointerdown must call prime() to unlock audio for the turn.
+  const prime = useCallback(() => {
+    const ctx = ensureCtx();
+    if (ctx.state === "suspended") void ctx.resume();
+  }, [ensureCtx]);
+
+  // Dev/HMR hygiene: Chrome caps concurrent AudioContexts (~6); close ours
+  // when the owning component unmounts.
+  useEffect(() => {
+    return () => {
+      ctxRef.current?.close().catch(() => {});
+      ctxRef.current = null;
+    };
+  }, []);
 
   const speak = useCallback(async (text: string) => {
     if (!text.trim()) return;
@@ -16,18 +37,19 @@ export function useTtsPlayback() {
     setSpeaking(true);
     let url: string | null = null;
     try {
-      const res = await fetch(`/api/eden/tts?token=${encodeURIComponent(token())}`, {
+      const res = await fetch("/api/eden/tts", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-hermes-session-token": token() },
         body: JSON.stringify({ text }),
       });
       if (!res.ok) throw new Error(`tts ${res.status}`);
       const blob = await res.blob();
       url = URL.createObjectURL(blob);
 
-      const ctx: AudioContext = (ctxRef.current ??= new (window.AudioContext ||
-        (window as any).webkitAudioContext)());
-      if (ctx.state === "suspended") await ctx.resume();
+      const ctx = ensureCtx();
+      // Fallback resume (not awaited: a non-gesture resume() can stay pending
+      // forever). The real unlock happens in prime() on the PTT gesture.
+      if (ctx.state === "suspended") void ctx.resume();
 
       const audio = new Audio(url);
       const src = ctx.createMediaElementSource(audio);
@@ -37,27 +59,40 @@ export function useTtsPlayback() {
       analyser.connect(ctx.destination);
       const buf = new Uint8Array(analyser.fftSize);
 
+      // Per-call rAF handle: a second speak() overlapping this one must not
+      // be able to cancel/clobber this call's animation loop.
+      let raf = 0;
       const tick = () => {
         analyser.getByteTimeDomainData(buf);
         amplitudeRef.current = rmsFromTimeDomain(buf);
-        rafRef.current = requestAnimationFrame(tick);
+        raf = requestAnimationFrame(tick);
       };
 
       const playedUrl = url;
-      await new Promise<void>((resolve) => {
-        audio.onplay = () => { rafRef.current = requestAnimationFrame(tick); };
-        audio.onended = () => {
-          cancelAnimationFrame(rafRef.current);
-          amplitudeRef.current = 0;
-          URL.revokeObjectURL(playedUrl);
-          resolve();
+      const cleanup = () => {
+        cancelAnimationFrame(raf);
+        amplitudeRef.current = 0;
+        src.disconnect();
+        analyser.disconnect();
+        URL.revokeObjectURL(playedUrl);
+        audio.removeAttribute("src");
+        audio.load();
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        audio.onplay = () => {
+          if (ctx.state !== "running") {
+            // The element "plays" into a suspended graph: silent mime. Fail
+            // loudly instead — the PTT gesture (prime) prevents this.
+            cleanup();
+            reject(new Error("audio blocked by autoplay policy"));
+            return;
+          }
+          raf = requestAnimationFrame(tick);
         };
-        audio.onerror = () => {
-          cancelAnimationFrame(rafRef.current);
-          URL.revokeObjectURL(playedUrl);
-          resolve();
-        };
-        audio.play().catch(() => resolve());
+        audio.onended = () => { cleanup(); resolve(); };
+        audio.onerror = () => { cleanup(); reject(new Error("audio playback failed")); };
+        audio.play().catch((err) => { cleanup(); reject(err); });
       });
       url = null; // consumed + revoked in the handlers above
     } finally {
@@ -65,7 +100,7 @@ export function useTtsPlayback() {
       amplitudeRef.current = 0;
       setSpeaking(false);
     }
-  }, []);
+  }, [ensureCtx]);
 
-  return { speak, speaking, amplitudeRef };
+  return { speak, speaking, amplitudeRef, prime };
 }

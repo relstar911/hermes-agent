@@ -19,8 +19,11 @@ describe("nextSphereState", () => {
   it("tool.complete -> thinking", () => {
     expect(nextSphereState("tool", ev("tool.complete", { tool_id: "t1" }))).toBe("thinking");
   });
-  it("message.delta -> speaking", () => {
-    expect(nextSphereState("thinking", ev("message.delta", { text: "hi" }))).toBe("speaking");
+  it("message.delta stays thinking (TTS playback owns the speaking visual)", () => {
+    expect(nextSphereState("thinking", ev("message.delta", { text: "hi" }))).toBe("thinking");
+  });
+  it("top-level error -> error", () => {
+    expect(nextSphereState("thinking", ev("error", { message: "rate limit" }))).toBe("error");
   });
   it("message.complete -> idle", () => {
     expect(nextSphereState("speaking", ev("message.complete"))).toBe("idle");

@@ -23,6 +23,17 @@ def test_eden_tts_returns_mp3_bytes():
     assert r.content == b"ID3MP3DATA"
     assert m.call_args.args[0] == "hallo welt"
 
+def test_eden_tts_content_type_follows_file_suffix():
+    # The key-free `edge` provider can emit Ogg/Opus when ffmpeg is present;
+    # the Content-Type must follow the actual synthesized file.
+    client, token = _client_and_token()
+    fake_json = '{"success": true, "file_path": "FAKE.ogg"}'
+    with mock.patch("tools.tts_tool.text_to_speech_tool", return_value=fake_json), \
+         mock.patch("pathlib.Path.read_bytes", return_value=b"OggS..."):
+        r = client.post(f"/api/eden/tts?token={token}", json={"text": "hallo"})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/ogg"
+
 def test_eden_tts_empty_text_400():
     client, token = _client_and_token()
     r = client.post(f"/api/eden/tts?token={token}", json={"text": "  "})

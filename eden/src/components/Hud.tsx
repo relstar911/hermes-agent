@@ -12,6 +12,7 @@ export function Hud({
   statusText,
   transcript,
   sttSupported,
+  pttReady,
   onPttDown,
   onPttUp,
 }: {
@@ -21,6 +22,7 @@ export function Hud({
   statusText: string;
   transcript: Msg[];
   sttSupported: boolean;
+  pttReady: boolean;
   onPttDown: () => void;
   onPttUp: () => void;
 }) {
@@ -55,7 +57,7 @@ export function Hud({
         <div className={`chip ${lang === "en" ? "on" : ""}`} onClick={() => setLang("en")}>EN</div>
         <button
           className="chip ptt"
-          disabled={!sttSupported}
+          disabled={!sttSupported || !pttReady}
           onPointerDown={onPttDown}
           onPointerUp={onPttUp}
           onPointerLeave={onPttUp}

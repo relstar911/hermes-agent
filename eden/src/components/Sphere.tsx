@@ -3,10 +3,12 @@ import type { SphereState } from "../lib/sphereState";
 
 const PAL = { node: [150, 235, 255], core: ["#eafdff", "#38e1ff", "#0b6f96"], link: "56,225,255", acc: [124, 240, 255] };
 
-export function Sphere({ state, amplitude }: { state: SphereState; amplitude: number }) {
+export function Sphere({ state, amplitudeRef }: { state: SphereState; amplitudeRef: { current: number } }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const live = useRef({ state, amplitude });
-  live.current = { state, amplitude };
+  // The amplitude arrives as a ref so the canvas loop reads it per frame
+  // without forcing the React tree to re-render at 60fps while speaking.
+  const live = useRef({ state, amplitudeRef });
+  live.current = { state, amplitudeRef };
 
   useEffect(() => {
     const cv = canvasRef.current!;
@@ -45,7 +47,8 @@ export function Sphere({ state, amplitude }: { state: SphereState; amplitude: nu
 
     const frame = (now: number) => {
       const dt = Math.min(0.05, (now - lastTs) / 1000); lastTs = now;
-      const { state: st, amplitude: amp } = live.current;
+      const { state: st, amplitudeRef: ar } = live.current;
+      const amp = ar.current;
       const energy = st === "speaking" ? Math.max(0.25, amp)
         : st === "thinking" ? 0.5 : st === "tool" ? 0.6
         : st === "listening" ? 0.12 : st === "error" ? 0.0 : 0.05;
