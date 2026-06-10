@@ -14,7 +14,7 @@ function Transcript({ transcript }: { transcript: Msg[] }) {
   useEffect(() => {
     const el = boxRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [transcript]);
+  }, [transcript, expanded]);
 
   const onScroll = () => {
     const el = boxRef.current!;
