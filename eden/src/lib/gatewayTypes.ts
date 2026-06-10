@@ -105,4 +105,14 @@ export type GatewayTypedEvent =
       payload?: { no_speech_limit?: boolean; text?: string };
       session_id?: string;
       type: "voice.transcript";
+    }
+  | {
+      payload: { question: string; choices?: string[] | null; request_id: string };
+      session_id?: string;
+      type: "clarify.request";
+    }
+  | {
+      payload: { command?: string; description?: string; pattern_key?: string; pattern_keys?: string[] };
+      session_id?: string;
+      type: "approval.request";
     };
