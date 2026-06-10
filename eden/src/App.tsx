@@ -23,18 +23,6 @@ export default function App() {
   const msgId = useRef(0);
   const langRef = useRef<Lang>(lang);
   langRef.current = lang;
-  const speechError = useCallback(() => {
-    setState("error");
-    setTranscript((tr) => [...tr, { id: msgId.current++, role: "system", text: "⚠ " + (langRef.current === "de" ? "Sprachausgabe fehlgeschlagen." : "Voice output failed.") }]);
-  }, []);
-  const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError);
-  const speechBuf = useRef("");
-  const spokeThisTurn = useRef(false);
-
-  const enqueueSpeech = useCallback((raw: string) => {
-    const clean = sanitizeForSpeech(raw, langRef.current);
-    if (clean) { enqueue(clean); spokeThisTurn.current = true; }
-  }, [enqueue]);
 
   const addMsg = useCallback((role: Msg["role"], text: string) => {
     setTranscript((tr) => [...tr, { id: msgId.current++, role, text }]);
@@ -45,6 +33,20 @@ export default function App() {
     addMsg("system", "⚠ " + message);
   }, [addMsg]);
 
+  const speechError = useCallback(() => {
+    fail(langRef.current === "de" ? "Sprachausgabe fehlgeschlagen." : "Voice output failed.");
+  }, [fail]);
+
+  const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError);
+  const speechBuf = useRef("");
+  const spokeThisTurn = useRef(false);
+  const awaitingTurnStart = useRef(false);
+
+  const enqueueSpeech = useCallback((raw: string) => {
+    const clean = sanitizeForSpeech(raw, langRef.current);
+    if (clean) { enqueue(clean); spokeThisTurn.current = true; }
+  }, [enqueue]);
+
   useEffect(() => {
     const gw = new GatewayClient();
     gwRef.current = gw;
@@ -52,18 +54,24 @@ export default function App() {
     gw.onAny((ev: GatewayEvent) => {
       if (!isCurrent()) return;
       setState((s) => nextSphereState(s, ev));
+      if (ev.type === "message.start") {
+        awaitingTurnStart.current = false;
+      }
       if (ev.type === "error") {
         // Server-side turn failure (provider down, rate limit, tool crash):
         // no message.complete will follow — recover here instead of freezing.
         // The reducer owns the state transition; this adds the transcript line.
         assistantBuf.current = "";
         speechBuf.current = "";
+        spokeThisTurn.current = false;
+        awaitingTurnStart.current = false;
         stopSpeech();
         const detail = String((ev as any).payload?.message ?? (ev as any).payload?.error ?? "");
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Agent-Fehler. " : "Agent error. ") + detail);
         return;
       }
       if (ev.type === "message.delta") {
+        if (awaitingTurnStart.current) return; // stale delta from superseded turn — discard
         const delta = (ev as any).payload?.text ?? "";
         assistantBuf.current += delta;
         speechBuf.current += delta;
@@ -77,6 +85,11 @@ export default function App() {
       if (ev.type === "message.complete") {
         const full = ((ev as any).payload?.text ?? assistantBuf.current).trim();
         assistantBuf.current = "";
+        if (awaitingTurnStart.current) {
+          // superseded turn finishing after barge-in: transcript yes, speech no
+          if (full) addMsg("eden", full);
+          return;
+        }
         if (speechBuf.current.trim()) enqueueSpeech(speechBuf.current);
         speechBuf.current = "";
         if (full) {
@@ -106,6 +119,8 @@ export default function App() {
       return;
     }
     stopSpeech();
+    assistantBuf.current = "";
+    awaitingTurnStart.current = true;
     speechBuf.current = "";
     spokeThisTurn.current = false;
     addMsg("user", text);
