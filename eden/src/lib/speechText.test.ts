@@ -24,6 +24,11 @@ describe("sanitizeForSpeech", () => {
   it("returns empty string for non-speakable content", () => {
     expect(sanitizeForSpeech("***\n---\n", "de")).toBe("");
   });
+  it("keeps sentence punctuation after a bare URL", () => {
+    expect(sanitizeForSpeech("Mehr auf https://example.com.", "de")).toBe("Mehr auf example.com.");
+    expect(sanitizeForSpeech("Details unter https://example.com/docs. Danach mehr.", "de"))
+      .toBe("Details unter example.com. Danach mehr.");
+  });
 });
 
 describe("extractSentences", () => {
@@ -49,5 +54,31 @@ describe("extractSentences", () => {
   });
   it("returns everything as rest when no boundary exists", () => {
     expect(extractSentences("nur ein fragment")).toEqual({ sentences: [], rest: "nur ein fragment" });
+  });
+  it("splits when the terminator is wrapped in markdown or quotes", () => {
+    const r = extractSentences('Das Ergebnis ist **wirklich wichtig.** Danach kommt noch ein langer Satz hier. Rest');
+    expect(r.sentences).toEqual(["Das Ergebnis ist **wirklich wichtig.**", "Danach kommt noch ein langer Satz hier."]);
+    expect(r.rest).toBe("Rest");
+  });
+  it("treats terminator+closer at buffer end as non-boundary (stream may continue)", () => {
+    expect(extractSentences('Er sagte "vielleicht."').sentences).toEqual([]);
+  });
+  it("does not split inside an unclosed code fence", () => {
+    const r = extractSentences("Hier kommt jetzt gleich ein Stück Code. ```js\nconst summe = wert1. + wert2. + nochEinLangerBezeichner.\n");
+    expect(r.sentences).toEqual(["Hier kommt jetzt gleich ein Stück Code."]);
+    expect(r.rest.startsWith("```js")).toBe(true);
+  });
+  it("does not treat numbered list markers as sentence ends", () => {
+    const r = extractSentences("Es gibt drei wichtige Punkte zu nennen: 1. Erstens die Performance. Mehr");
+    expect(r.sentences).toEqual(["Es gibt drei wichtige Punkte zu nennen: 1. Erstens die Performance."]);
+    expect(r.rest).toBe("Mehr");
+  });
+  it("returns empty results for empty input", () => {
+    expect(extractSentences("")).toEqual({ sentences: [], rest: "" });
+  });
+  it("treats an ellipsis followed by space as a boundary (short chunk merges forward)", () => {
+    const r = extractSentences("Nun denn… Das war ein wirklich erstaunlich langer Tag heute. X");
+    expect(r.sentences).toEqual(["Nun denn… Das war ein wirklich erstaunlich langer Tag heute."]);
+    expect(r.rest).toBe("X");
   });
 });
