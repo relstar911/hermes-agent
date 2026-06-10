@@ -1,6 +1,8 @@
 # E.D.E.N — Session Handoff (2026-06-10)
 
-**Branch:** `feature/eden-voice-ui` · **HEAD:** `140404ed9` · **Working tree:** clean
+> **UPDATE (2026-06-10, session 2):** see §10 at the bottom — C-1 and all four importants are FIXED, T0/T2/T9 are DONE, and the resume command below was corrected (`--tui` is required for `/api/ws`). Only the OpenRouter key and the human voice smoke remain.
+
+**Branch:** `feature/eden-voice-ui` · **HEAD:** `e079436f5` · **Working tree:** clean
 **Remotes:** `origin` = `relstar911/hermes-agent` (fork, push here) · `upstream` = `NousResearch/hermes-agent`
 
 This document is the single source of truth for resuming E.D.E.N. It records exactly what is built and verified, what is intentionally NOT done yet, and the precise steps to take it live next session.
@@ -105,11 +107,13 @@ All three remaining tasks need the running dashboard and/or your secrets. None r
 Prove the WS path works end-to-end on Windows before/after wiring.
 ```powershell
 # 1. Start the dashboard (serves /api/ws AND /eden on 127.0.0.1:9119)
-python -m hermes_cli.main dashboard --no-open
+#    ⚠ --tui is REQUIRED: without it _DASHBOARD_EMBEDDED_CHAT_ENABLED stays False
+#      and every WS endpoint (incl. /api/ws) rejects the handshake with 4403.
+python -m hermes_cli.main dashboard --tui --no-open
 # 2. The session token is injected into the served HTML; the SPA reads it automatically.
-#    For a manual WS smoke, see eden/scripts/ws_smoke.mjs in the plan (Task 0) — not yet created.
+node eden/scripts/ws_smoke.mjs   # automated smoke (Node 22+): /eden, TTS bytes, full WS turn
 ```
-**Note:** The plan's optional `eden/scripts/ws_smoke.mjs` was never created (the SPA itself is the real client). Either create it from plan Task 0, or just open `/eden` and observe the connection state.
+**DONE 2026-06-10 session 2:** `ws_smoke.mjs` created and green end-to-end (see §10).
 
 ### T2 — Cinematic TTS provider
 `edge` TTS works **key-free** today (the `/api/eden/tts` endpoint already returns real MP3 via `text_to_speech_tool`). For the cinematic voice, set a provider in `~/.hermes/config.yaml`:
@@ -156,7 +160,7 @@ hermes mcp list
 # from repo root, on branch feature/eden-voice-ui
 python -m hermes_cli.main doctor            # expect green
 npm --prefix eden run build                 # rebuild SPA → hermes_cli/eden_dist
-python -m hermes_cli.main dashboard --no-open
+python -m hermes_cli.main dashboard --tui --no-open   # --tui REQUIRED for /api/ws
 # open http://127.0.0.1:9119/eden
 ```
 To re-run all automated checks:
@@ -222,3 +226,37 @@ A 6-dimension review (backend, data-flow, React hygiene, build/deploy, voice Web
 - **HUD corner readouts** (`MODEL sonnet-4.5`, `PWR 98%`, …) are static decorative chrome, not live telemetry.
 - **No auto-reconnect:** a dropped WS surfaces an error state; recovery currently relies on the next user turn. Auto-reconnect is a future enhancement (out of v1 scope).
 - **OpenAI TTS path** needs `pip install openai` (doctor flags it). The `edge`/ElevenLabs paths do not.
+
+---
+
+## 10. Session 2 results (2026-06-10 evening) — fixes + live validation
+
+**Commits:** `57e603a75` (C-1, I-1..I-4 + minors), `c0a4fde79` (ws_smoke.mjs), `e079436f5` (fresh-eyes review hardening). All verified at HEAD: tsc 0 · **15 vitest** · build 0 · **5 pytest** · live smoke green.
+
+### Fixed (from §7)
+- **C-1** ✅ `prime()` creates/resumes the AudioContext on the PTT `onPointerDown`; `audio.play()` rejections and suspended-context playback surface as errors (with a 1.5s resume grace race to avoid false positives).
+- **I-1** ✅ `displayState = speaking ? "speaking" : stt.listening ? "listening" : state`.
+- **I-2** ✅ reducer `case "error"` + onAny recovery (transcript line, buffer reset).
+- **I-3** ✅ `src/analyser.disconnect()` + element release per turn. **I-4** ✅ per-call rAF handle.
+- **Minors fixed:** Content-Type from file suffix (proved live: edge emits `.ogg`!); StaticFiles assets guard; header token on TTS POST; submit guard + PTT disabled until session ready; `message.delta`→thinking; amplitude as ref into Sphere (no 60fps App re-render); AudioContext closed on unmount; mic-permission denial message; I-5 documented as v1 scope.
+- **Still open (minor, opportunistic):** dev-server token injection (`npm run dev` unsupported, use built bundle); stale `listening` closure in useSpeechRecognition; tool-context HUD text (spec §5); no auto-reconnect; brief listening→thinking overlap after final STT result (cosmetic).
+
+### Live validation (T0 — all green)
+`node eden/scripts/ws_smoke.mjs` against `dashboard --tui --no-open`:
+- `/eden` serves with token injected ✓ · `POST /api/eden/tts` → 200 `audio/ogg`, 23.4 KB real audio ✓
+- WS `/api/ws` connect ✓ · `session.create` ✓ · `prompt.submit` ✓ · events streamed: `gateway.ready, session.info, message.start, thinking.delta, status.update, message.complete` ✓
+- **Wire detail:** events arrive as JSON-RPC notifications `{method:"event", params:{type,payload}}` — the SPA client already parses this correctly.
+- **Critical discovery:** `/api/ws` is gated by `_DASHBOARD_EMBEDDED_CHAT_ENABLED` — the dashboard **must** be started with `--tui` (or `HERMES_DASHBOARD_TUI=1`). Without it the EDEN SPA can never connect (4403 at handshake). All resume commands in this doc were corrected.
+
+### T2 (TTS) — done for v1
+`text_to_speech_tool` verified live: edge provider, key-free, real `.ogg` output. Cinematic voice still needs your `ELEVENLABS_API_KEY` (or OpenAI) in `~/.hermes/.env` + `tts: provider:` block in config.yaml — only user can supply.
+
+### T9 (integrations) — done where possible
+`hermes mcp list`: **filesystem** (14 tools, stdio via global `mcp-server-filesystem`), **higgsfield** (35 tools, hosted OAuth), **notion** (14 tools, hosted OAuth) — all ✓ enabled; tool discovery worked without interactive login (first real call may still pop OAuth consent). Chrome CDP was already configured (`browser.cdp_url: http://127.0.0.1:9222`; start Chrome with `--remote-debugging-port=9222` when needed). **Still user-blocked:** GitHub MCP (needs PAT), web search (needs TAVILY/FIRECRAWL/EXA key).
+Note: `hermes mcp add` is interactive (confirm prompts) — pipe `"y" |` when scripting.
+
+### ⛔ THE one remaining blocker: OpenRouter 401 "User not found"
+The key in `~/.hermes/.env` is rejected by OpenRouter's own auth endpoint (`GET /api/v1/auth/key` → 401). This is account-side: key revoked/deleted or account issue — check https://openrouter.ai/settings/keys and replace `OPENROUTER_API_KEY`. (`hermes doctor` only checks key *presence*, not validity — don't trust its green for this.) Until fixed, agent turns return the 401 text as a spoken message (graceful — verified live; the gateway emits **no** top-level `error` event on provider failure, the error text arrives as a normal `message.complete`).
+
+### What §9 (human voice smoke) needs now
+1. Fix the OpenRouter key. 2. `npm --prefix eden run build` (already built at HEAD). 3. `python -m hermes_cli.main dashboard --tui --no-open`. 4. Open `http://127.0.0.1:9119/eden`, hold PTT, speak. Everything else is verified.
