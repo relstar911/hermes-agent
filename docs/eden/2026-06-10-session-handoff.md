@@ -171,7 +171,49 @@ Then work the backlog in order: **T2 (TTS key) → T0/§9 (open /eden, speak) �
 
 ## 7. Final-review findings (multi-agent, adversarially verified)
 
-> A 6-dimension review workflow (backend, data-flow, React hygiene, build/deploy, voice Web-APIs, spec-scope) with per-finding adversarial verification ran at the end of this session (run `wf_7f4de2c4-309`). **Results pending — to be appended here when the workflow returns.** None of its findings block the wrap-up; they form the next-session quality backlog. Code is green and committed as-is.
+A 6-dimension review (backend, data-flow, React hygiene, build/deploy, voice Web-APIs, spec-scope), each finding independently verified by a second skeptic agent, ran at the end of this session (run `wf_7f4de2c4-309`, 29 agents). **23 raw findings → 22 confirmed, 1 dismissed as a false positive.** Severity: **1 critical, 4 important (unique), ~15 minor.** Code is green and committed as-is; these are the next-session quality backlog. None of the minors block a first live demo.
+
+**Recommended fix order:** C-1 first (it's the difference between "EDEN talks" and "EDEN silently mimes talking"), then I-1 and I-5 (both are visible UX gaps in the core loop), then the rest opportunistically.
+
+### 🔴 CRITICAL — fix before the first live voice test
+- **C-1 · First `speak()` produces no audio in Chrome (AudioContext stays suspended).** `eden/src/hooks/useTtsPlayback.ts:28-30,60`. The `AudioContext` is created/`resume()`d inside `speak()`, which only ever runs from the WebSocket `message.complete` callback — **not** a user gesture. Chrome's autoplay policy leaves it `suspended`; `resume()` from a non-gesture callstack never transitions to `running`, and `audio.play()`'s rejection is swallowed by `.catch(()=>resolve())`. Net: the sphere animates "speaking" while **no sound plays**, with zero diagnostics. **Fix:** construct + `resume()` the `AudioContext` inside the push-to-talk `onPointerDown` (prime it on the user gesture; keep lazy-create as fallback), and surface `audio.play()` rejections instead of swallowing them. *(This is exactly why the live smoke §9 hasn't been run — it would surface here first.)*
+
+### 🟠 IMPORTANT
+- **I-1 · Sphere `listening` state is unreachable on the push-to-talk path (spec §5/§6 gap).** `eden/src/App.tsx:84`. The only path to `listening` is the reducer's `voice.status` case, but EDEN uses browser STT, so the gateway never emits `voice.status` — the spec's headline "ruhiges Atmen beim Zuhören" never appears, and `stt.listening` only drives the interim-text overlay. **Fix:** `const displayState = speaking ? "speaking" : stt.listening ? "listening" : state;` (mirror the existing `speaking` override). One line; wires the existing Sphere listening branch to the real gesture.
+- **I-2 · Server-side top-level `error` event is never handled → sphere can freeze at `thinking`/`tool`.** `eden/src/App.tsx:49-64` + `eden/src/lib/sphereState.ts`. On a turn that fails server-side (no provider / rate limit / tool crash) the gateway emits `{type:"error"}` instead of `message.complete`; EDEN ignores it (no `error` branch in `onAny`, no `case "error"` in the reducer), so there's no message, no TTS, no path back to idle until the next turn. **Fix:** add `if (ev.type==="error"){ fail(<localized> + payload.message); assistantBuf.current=""; return; }` and `case "error": return "error";` in the reducer.
+- **I-3 · `useTtsPlayback` leaks a `MediaElementSource`+`Analyser` node graph every spoken turn.** `eden/src/hooks/useTtsPlayback.ts:32-37`. Nodes are connected to the shared long-lived `AudioContext` and never `disconnect()`-ed, accumulating one orphaned graph (and its `<audio>`) per reply. **Fix:** `src.disconnect(); analyser.disconnect();` in `onended`/`onerror`, and release the element. *(Two reviewers flagged this independently.)*
+- **I-4 · Overlapping `speak()` calls clobber the shared `rafRef` → runaway animation loop + double audio.** `eden/src/hooks/useTtsPlayback.ts:10,43,48-59`. TTS audio outlives `message.complete`, so a fast next turn starts a second `speak()` that overwrites the shared rAF handle; the first `onended` then cancels the wrong loop, orphaning a rAF and flipping `speaking` off mid-speech. **Fix:** scope the rAF handle to a local `let raf=0` per call (and/or guard concurrent `speak()`).
+- **I-5 · `/eden` breaks behind a path-prefix reverse proxy (`X-Forwarded-Prefix` ignored).** `hermes_cli/web_server.py:3588-3619`. `mount_eden` hardcodes `__HERMES_BASE_PATH__=""` and never rewrites `/eden/assets/` URLs the way `mount_spa` does, and the TTS fetch is a hardcoded absolute path. **Same-origin `http://127.0.0.1:9119/eden` (our target) works fine** — this only bites under a prefix proxy. **Fix:** mirror `mount_spa`'s `_normalise_prefix` + asset-URL rewrite, or add a one-line comment that `/eden` proxy support is out of v1 scope.
+
+### 🟡 MINOR (opportunistic; grouped)
+**Backend (`hermes_cli/web_server.py`):**
+- Response `media_type` hardcoded `audio/mpeg`, but the default key-free `edge` provider returns Ogg/Opus when ffmpeg is present → wrong Content-Type. Derive it from `Path(file_path).suffix`. (`:3575-3578`)
+- `StaticFiles("/eden/assets")` not guarded by an assets-dir check → hard startup crash if a build emits `index.html` but no `assets/`. Add `(EDEN_DIST/"assets").is_dir()` guard or `check_dir=False`. (`:3599-3603`)
+- Session token sent via `?token=` on the POST (leaks to logs/Referer); the endpoint already accepts the `x-hermes-session-token` header — prefer it for this POST. (`:3537-3539`)
+
+**Frontend data-flow (`eden/src/App.tsx`, `sphereState.ts`):**
+- `prompt.submit` can fire with `session_id: null` if the user speaks before `session.create` resolves → guard `if (!sessionRef.current) { fail(...); return; }` and grey the PTT until ready.
+- Reducer maps `message.delta → "speaking"` during text streaming (before any audio), so the sphere shows "speaking" with amp=0 mid-generation → map delta to `"thinking"` and let the TTS `speaking` flag own the speaking visual.
+- `(ev as any).payload` casts bypass the `GatewayTypedEvent` union → a future wire-field rename would silently lose text. Narrow on `ev.type`. (`usage` on `message.complete` is also dropped — fine for v1.)
+- `tool.complete`-with-error transitions the sphere to `error` for one event then gets overwritten as the turn continues → reserve `error` for turn-ending failures; keep the system message.
+
+**React hygiene (`eden/src/hooks/useTtsPlayback.ts`, `App.tsx`):**
+- `AudioContext` never `close()`d on unmount/HMR → dev HMR can hit Chrome's ~6-context cap. Add an unmount cleanup effect.
+- The per-frame `force()` re-render while speaking re-renders the whole App tree (incl. HUD/transcript) at ~60fps just to feed one number into a ref → pass `amplitudeRef` into `Sphere` and read it in Sphere's own loop; delete the `force` effect.
+
+**Build/deploy (`eden/`):**
+- `npm run dev` (Vite at :5173) has no token injection → `connect()` throws; only the built bundle served by the dashboard works. Port `web/`'s `hermesDevToken()` plugin or document the console workaround.
+- TTS `fetch("/api/eden/tts")` doesn't honor `HERMES_BASE_PATH` (consistent with I-5).
+
+**Voice Web-APIs (`eden/src/hooks/useSpeechRecognition.ts`):**
+- `start()/stop()` close over stale `listening` (React state, cleared async via `onend`) → a release-before-onstart or a DE↔EN switch mid-listen can drop/duplicate a press. Track a `wantListeningRef` / drive off `onstart`/`onend`.
+- Mic-permission denial gives no feedback (`onerror` ignores `e.error`) → on `'not-allowed'` route a localized message through `fail()`.
+
+**Spec-scope:**
+- Tool-active state shows only the generic "WORKING"/"ARBEITET" label, not the spec §5 contextual text from `tool.start` `payload.name`/`context` (e.g. "durchsucht das Web…"). Capture name/context into state and show it while `state==="tool"`.
+
+### ✅ Dismissed (false positive)
+- *"interim transcript not cleared on error/abort"* — the Web Speech `end` event always fires after `error` (incl. `no-speech`/`aborted`) and clears interim; the symptom isn't reproducible. No change needed.
 
 ---
 
