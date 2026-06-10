@@ -12,3 +12,9 @@ export function sttLang(lang: Lang): string {
 export function t(lang: Lang, key: string): string {
   return STRINGS[lang]?.[key] ?? key;
 }
+
+/** Prepended (invisibly) to every prompt.submit — keeps answers speakable. */
+export const VOICE_INSTRUCTION: Record<Lang, string> = {
+  de: "[Anweisung: Du bist EDEN, ein Sprachassistent. Antworte natürlich gesprochen in 1 bis 4 kurzen Sätzen — kein Markdown, keine Listen, keine URLs, kein Code, keine Emojis. Wenn der Nutzer ausdrücklich mehr Details verlangt, antworte ausführlicher.]",
+  en: "[Instruction: You are EDEN, a voice assistant. Answer in natural spoken language, 1 to 4 short sentences — no markdown, no lists, no URLs, no code, no emojis. If the user explicitly asks for more detail, answer at length.]",
+};

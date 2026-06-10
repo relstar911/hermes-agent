@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GatewayClient } from "./lib/gatewayClient";
 import type { GatewayEvent } from "./lib/gatewayTypes";
 import { nextSphereState, type SphereState } from "./lib/sphereState";
-import { t, type Lang } from "./lib/i18n";
+import { t, VOICE_INSTRUCTION, type Lang } from "./lib/i18n";
+import { sanitizeForSpeech, extractSentences } from "./lib/speechText";
 import { Sphere } from "./components/Sphere";
 import { Hud } from "./components/Hud";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
-import { useTtsPlayback } from "./hooks/useTtsPlayback";
+import { useSpeechQueue } from "./hooks/useSpeechQueue";
 import "./styles.css";
 
 type Msg = { id: number; role: "user" | "eden" | "system"; text: string };
@@ -22,7 +23,18 @@ export default function App() {
   const msgId = useRef(0);
   const langRef = useRef<Lang>(lang);
   langRef.current = lang;
-  const { speak, speaking, amplitudeRef, prime } = useTtsPlayback();
+  const speechError = useCallback(() => {
+    setState("error");
+    setTranscript((tr) => [...tr, { id: msgId.current++, role: "system", text: "⚠ " + (langRef.current === "de" ? "Sprachausgabe fehlgeschlagen." : "Voice output failed.") }]);
+  }, []);
+  const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError);
+  const speechBuf = useRef("");
+  const spokeThisTurn = useRef(false);
+
+  const enqueueSpeech = useCallback((raw: string) => {
+    const clean = sanitizeForSpeech(raw, langRef.current);
+    if (clean) { enqueue(clean); spokeThisTurn.current = true; }
+  }, [enqueue]);
 
   const addMsg = useCallback((role: Msg["role"], text: string) => {
     setTranscript((tr) => [...tr, { id: msgId.current++, role, text }]);
@@ -45,21 +57,34 @@ export default function App() {
         // no message.complete will follow — recover here instead of freezing.
         // The reducer owns the state transition; this adds the transcript line.
         assistantBuf.current = "";
+        speechBuf.current = "";
+        stopSpeech();
         const detail = String((ev as any).payload?.message ?? (ev as any).payload?.error ?? "");
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Agent-Fehler. " : "Agent error. ") + detail);
         return;
       }
-      if (ev.type === "message.delta") assistantBuf.current += (ev as any).payload?.text ?? "";
+      if (ev.type === "message.delta") {
+        const delta = (ev as any).payload?.text ?? "";
+        assistantBuf.current += delta;
+        speechBuf.current += delta;
+        const { sentences, rest } = extractSentences(speechBuf.current);
+        speechBuf.current = rest;
+        for (const s of sentences) enqueueSpeech(s);
+      }
       if (ev.type === "tool.complete" && (ev as any).payload?.error) {
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Tool-Fehler: " : "Tool error: ") + (ev as any).payload.error);
       }
       if (ev.type === "message.complete") {
         const full = ((ev as any).payload?.text ?? assistantBuf.current).trim();
         assistantBuf.current = "";
+        if (speechBuf.current.trim()) enqueueSpeech(speechBuf.current);
+        speechBuf.current = "";
         if (full) {
           addMsg("eden", full);
-          speak(full).catch(() => fail(langRef.current === "de" ? "Sprachausgabe fehlgeschlagen." : "Voice output failed."));
+          // turn produced no deltas (or nothing speakable streamed): speak the full text
+          if (!spokeThisTurn.current) enqueueSpeech(full);
         }
+        spokeThisTurn.current = false;
       }
     });
     (async () => {
@@ -73,19 +98,22 @@ export default function App() {
       if (isCurrent()) fail(langRef.current === "de" ? "Verbindung zum Agenten fehlgeschlagen." : "Connection to agent failed.");
     });
     return () => gw.close();
-  }, [speak, addMsg, fail]);
+  }, [enqueueSpeech, addMsg, fail, stopSpeech]);
 
   const submit = useCallback((text: string) => {
     if (!gwRef.current || !sessionRef.current) {
       fail(langRef.current === "de" ? "Sitzung noch nicht bereit — einen Moment." : "Session not ready yet — one moment.");
       return;
     }
+    stopSpeech();
+    speechBuf.current = "";
+    spokeThisTurn.current = false;
     addMsg("user", text);
     setState("thinking");
     gwRef.current
-      .request("prompt.submit", { session_id: sessionRef.current, text })
+      .request("prompt.submit", { session_id: sessionRef.current, text: VOICE_INSTRUCTION[langRef.current] + "\n\n" + text })
       .catch(() => fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."));
-  }, [addMsg, fail]);
+  }, [addMsg, fail, stopSpeech]);
 
   const onMicError = useCallback((code: string) => {
     // 'no-speech'/'aborted' are normal push-to-talk outcomes; only a denied
