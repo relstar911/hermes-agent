@@ -18,3 +18,15 @@ export const VOICE_INSTRUCTION: Record<Lang, string> = {
   de: "[Anweisung: Du bist EDEN, ein Sprachassistent. Antworte natürlich gesprochen in 1 bis 4 kurzen Sätzen — kein Markdown, keine Listen, keine URLs, kein Code, keine Emojis. Wenn der Nutzer ausdrücklich mehr Details verlangt, antworte ausführlicher.]",
   en: "[Instruction: You are EDEN, a voice assistant. Answer in natural spoken language, 1 to 4 short sentences — no markdown, no lists, no URLs, no code, no emojis. If the user explicitly asks for more detail, answer at length.]",
 };
+
+const TOOL_LABELS: Record<Lang, Record<string, string>> = {
+  de: { web_search: "DURCHSUCHT DAS WEB", browser: "STEUERT DEN BROWSER", terminal: "FÜHRT BEFEHLE AUS", file: "ARBEITET MIT DATEIEN", text_to_speech: "SYNTHETISIERT SPRACHE" },
+  en: { web_search: "SEARCHING THE WEB", browser: "DRIVING THE BROWSER", terminal: "RUNNING COMMANDS", file: "WORKING WITH FILES", text_to_speech: "SYNTHESIZING SPEECH" },
+};
+
+/** Human label for a tool.start name; falls back to the raw name. */
+export function toolLabel(lang: Lang, name: string | undefined): string {
+  if (!name) return t(lang, "tool");
+  const key = Object.keys(TOOL_LABELS[lang]).find((k) => name.toLowerCase().includes(k));
+  return key ? TOOL_LABELS[lang][key] : name.replace(/_/g, " ").toUpperCase();
+}

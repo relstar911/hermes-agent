@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GatewayClient } from "./lib/gatewayClient";
 import type { GatewayEvent } from "./lib/gatewayTypes";
 import { nextSphereState, type SphereState } from "./lib/sphereState";
-import { t, VOICE_INSTRUCTION, type Lang } from "./lib/i18n";
+import { t, toolLabel, VOICE_INSTRUCTION, type Lang } from "./lib/i18n";
 import { sanitizeForSpeech, extractSentences } from "./lib/speechText";
 import { Sphere } from "./components/Sphere";
 import { Hud } from "./components/Hud";
@@ -17,6 +17,7 @@ export default function App() {
   const [state, setState] = useState<SphereState>("idle");
   const [transcript, setTranscript] = useState<Msg[]>([]);
   const [ready, setReady] = useState(false);
+  const [toolInfo, setToolInfo] = useState<{ name?: string; context?: string } | null>(null);
   const gwRef = useRef<GatewayClient | null>(null);
   const sessionRef = useRef<string | null>(null);
   const assistantBuf = useRef("");
@@ -57,10 +58,16 @@ export default function App() {
       if (ev.type === "message.start") {
         awaitingTurnStart.current = false;
       }
+      if (ev.type === "tool.start") {
+        const p = (ev as any).payload ?? {};
+        setToolInfo({ name: p.name, context: p.context });
+      }
+      if (ev.type === "tool.complete") setToolInfo(null);
       if (ev.type === "error") {
         // Server-side turn failure (provider down, rate limit, tool crash):
         // no message.complete will follow — recover here instead of freezing.
         // The reducer owns the state transition; this adds the transcript line.
+        setToolInfo(null);
         assistantBuf.current = "";
         speechBuf.current = "";
         spokeThisTurn.current = false;
@@ -83,6 +90,7 @@ export default function App() {
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Tool-Fehler: " : "Tool error: ") + (ev as any).payload.error);
       }
       if (ev.type === "message.complete") {
+        setToolInfo(null);
         const full = ((ev as any).payload?.text ?? assistantBuf.current).trim();
         assistantBuf.current = "";
         if (awaitingTurnStart.current) {
@@ -146,7 +154,10 @@ export default function App() {
   };
 
   const displayState: SphereState = speaking ? "speaking" : stt.listening ? "listening" : state;
-  const statusText = useMemo(() => t(lang, displayState), [lang, displayState]);
+  const statusText = useMemo(() => {
+    if (displayState === "tool" && toolInfo) return toolInfo.context || toolLabel(lang, toolInfo.name);
+    return t(lang, displayState);
+  }, [lang, displayState, toolInfo]);
 
   return (
     <>
