@@ -39,15 +39,16 @@ export default function App() {
     const isCurrent = () => gwRef.current === gw;
     gw.onAny((ev: GatewayEvent) => {
       if (!isCurrent()) return;
+      setState((s) => nextSphereState(s, ev));
       if (ev.type === "error") {
         // Server-side turn failure (provider down, rate limit, tool crash):
         // no message.complete will follow — recover here instead of freezing.
+        // The reducer owns the state transition; this adds the transcript line.
         assistantBuf.current = "";
         const detail = String((ev as any).payload?.message ?? (ev as any).payload?.error ?? "");
-        fail((langRef.current === "de" ? "Agent-Fehler. " : "Agent error. ") + detail);
+        addMsg("system", "⚠ " + (langRef.current === "de" ? "Agent-Fehler. " : "Agent error. ") + detail);
         return;
       }
-      setState((s) => nextSphereState(s, ev));
       if (ev.type === "message.delta") assistantBuf.current += (ev as any).payload?.text ?? "";
       if (ev.type === "tool.complete" && (ev as any).payload?.error) {
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Tool-Fehler: " : "Tool error: ") + (ev as any).payload.error);
@@ -96,10 +97,10 @@ export default function App() {
 
   const stt = useSpeechRecognition(lang, submit, onMicError);
 
-  const onPttDown = useCallback(() => {
+  const onPttDown = () => {
     prime(); // unlock the AudioContext on the user gesture (Chrome autoplay policy)
     stt.start();
-  }, [prime, stt.start]);
+  };
 
   const displayState: SphereState = speaking ? "speaking" : stt.listening ? "listening" : state;
   const statusText = useMemo(() => t(lang, displayState), [lang, displayState]);

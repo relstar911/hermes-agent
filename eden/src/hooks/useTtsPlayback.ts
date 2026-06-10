@@ -82,10 +82,16 @@ export function useTtsPlayback() {
       await new Promise<void>((resolve, reject) => {
         audio.onplay = () => {
           if (ctx.state !== "running") {
-            // The element "plays" into a suspended graph: silent mime. Fail
-            // loudly instead — the PTT gesture (prime) prevents this.
-            cleanup();
-            reject(new Error("audio blocked by autoplay policy"));
+            // The prime()/fallback resume() may still be pending (it is fired
+            // without await). Give it a bounded chance before declaring the
+            // autoplay block — a truly blocked resume() never settles.
+            const blocked = new Promise<never>((_, rej) =>
+              setTimeout(() => rej(new Error("audio blocked by autoplay policy")), 1500),
+            );
+            Promise.race([ctx.resume(), blocked]).then(
+              () => { raf = requestAnimationFrame(tick); },
+              (err) => { cleanup(); reject(err); },
+            );
             return;
           }
           raf = requestAnimationFrame(tick);

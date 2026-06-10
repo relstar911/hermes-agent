@@ -10,6 +10,12 @@ if (!m) {
   console.error("FAIL /eden HTML has no injected session token");
   process.exit(1);
 }
+// Guard against the dashboard SPA's catch-all answering (EDEN not built):
+// its index.html also injects the token, so check for the EDEN bundle.
+if (!html.includes("/eden/assets/")) {
+  console.error("FAIL /eden served the dashboard SPA, not EDEN (run: npm --prefix eden run build)");
+  process.exit(1);
+}
 const token = m[1];
 console.log("OK   /eden served with session token injected");
 
@@ -46,6 +52,7 @@ const turnDone = new Promise((resolve, reject) => {
     () => reject(new Error(`no message.complete within 120s; events seen: ${[...seen].join(", ") || "(none)"}`)),
     120000,
   );
+  ws.addEventListener("close", () => reject(new Error("websocket closed mid-turn")));
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.id && pending.has(msg.id)) {
