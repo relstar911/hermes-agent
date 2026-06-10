@@ -122,6 +122,7 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
         }
         const url = await prefetch;
         prefetch = null;
+        if (gen !== genRef.current) { URL.revokeObjectURL(url); break; }
         // prefetch the next chunk while this one plays
         const nextText = queueRef.current.shift();
         if (nextText !== undefined) {
@@ -129,14 +130,15 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
           p.catch(() => {}); // backstop: real handling happens when drain awaits p
           prefetch = p;
         }
-        if (gen !== genRef.current) { URL.revokeObjectURL(url); break; }
         await playUrl(url, gen);
       }
       // a prefetched chunk may remain if stop() hit mid-await
       if (prefetch) prefetch.then((u) => URL.revokeObjectURL(u)).catch(() => {});
     } catch (err) {
-      queueRef.current = [];
-      if (gen === genRef.current) onErrorRef.current?.(err);
+      if (gen === genRef.current) {
+        queueRef.current = [];
+        onErrorRef.current?.(err);
+      }
     } finally {
       drainingRef.current = false;
       amplitudeRef.current = 0;
