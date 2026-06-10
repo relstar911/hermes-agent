@@ -5,7 +5,17 @@ const ORDINALS: Record<Lang, string[][]> = {
   en: [["one", "first", "1"], ["two", "second", "2"], ["three", "third", "3"], ["four", "fourth", "4"], ["five", "fifth", "5"]],
 };
 const YES: Record<Lang, string[]> = { de: ["ja", "jep", "klar", "mach"], en: ["yes", "yeah", "yep", "sure"] };
-const NO: Record<Lang, string[]> = { de: ["nein", "nicht", "stopp", "abbrechen"], en: ["no", "nope", "don't", "stop"] };
+const NO: Record<Lang, string[]> = { de: ["nein", "nicht", "stopp", "abbrechen"], en: ["no", "nope", "not", "don't", "stop"] };
+
+/** Tokenize a normalised string into whole words, stripping trailing punctuation. */
+function tokens(norm: string): string[] {
+  return norm.split(/\s+/).map((w) => w.replace(/[.,!?;:]+$/, "")).filter(Boolean);
+}
+
+/** Returns true when any word in the token list exactly matches a word in the given list. */
+function hasWholeWord(toks: string[], list: string[]): boolean {
+  return toks.some((tok) => list.includes(tok));
+}
 
 /** Match a spoken answer to one of the offered choices. Returns the index or null. */
 export function matchChoice(input: string, choices: string[], lang: Lang): number | null {
@@ -33,18 +43,21 @@ export function matchChoice(input: string, choices: string[], lang: Lang): numbe
   }
   if (ordinalMatch !== -1) return ordinalMatch;
 
-  // 4. yes/no on binary prompts
+  // 4. yes/no on binary prompts — whole-word only; check NO before YES (negation wins)
   if (choices.length === 2) {
-    if (YES[lang].some((y) => norm.includes(y))) return 0;
-    if (NO[lang].some((n) => norm.includes(n))) return 1;
+    const toks = tokens(norm);
+    if (hasWholeWord(toks, NO[lang])) return 1;
+    if (hasWholeWord(toks, YES[lang])) return 0;
   }
   return null;
 }
 
-/** Plain yes/no detection (approval prompts accept it regardless of choice count). */
+/** Plain yes/no detection (approval prompts accept it regardless of choice count).
+ *  Uses whole-word matching and checks NO before YES so negation always wins. */
 export function matchYesNo(input: string, lang: Lang): "yes" | "no" | null {
   const norm = input.toLowerCase().trim();
-  if (YES[lang].some((y) => norm.includes(y))) return "yes";
-  if (NO[lang].some((n) => norm.includes(n))) return "no";
+  const toks = tokens(norm);
+  if (hasWholeWord(toks, NO[lang])) return "no";
+  if (hasWholeWord(toks, YES[lang])) return "yes";
   return null;
 }

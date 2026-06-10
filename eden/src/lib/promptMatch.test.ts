@@ -27,6 +27,10 @@ describe("matchChoice", () => {
   it("returns null when nothing matches", () => {
     expect(matchChoice("erzähl mir was anderes", CHOICES, "de")).toBeNull();
   });
+  it("does not match yes/no substrings as whole-word in binary prompts", () => {
+    expect(matchChoice("jagen wir los", ["Erlauben", "Ablehnen"], "de")).toBeNull();
+    expect(matchChoice("ja bitte", ["Erlauben", "Ablehnen"], "de")).toBe(0);
+  });
 });
 
 describe("matchYesNo", () => {
@@ -34,5 +38,14 @@ describe("matchYesNo", () => {
     expect(matchYesNo("ja gerne", "de")).toBe("yes");
     expect(matchYesNo("nein lieber nicht", "de")).toBe("no");
     expect(matchYesNo("vielleicht", "de")).toBeNull();
+  });
+  it("does not false-approve negated utterances", () => {
+    expect(matchYesNo("not sure", "en")).toBe("no");
+    expect(matchYesNo("nicht klar", "de")).toBe("no");
+    expect(matchYesNo("eher nicht", "de")).toBe("no");
+  });
+  it("matches whole words only", () => {
+    expect(matchYesNo("jagen wir los", "de")).toBeNull();
+    expect(matchYesNo("ja bitte", "de")).toBe("yes");
   });
 });

@@ -57,6 +57,8 @@ export default function App() {
     setPrompt(null);
     gwRef.current?.request("clarify.respond", { request_id: requestId, answer }).catch(() => {
       addMsg("system", "⚠ " + (langRef.current === "de" ? "Anfrage abgelaufen." : "Request expired."));
+      // F2: a dead respond must not leave the sphere stuck in "thinking"
+      setState("idle");
     });
   }, [addMsg]);
 
@@ -64,6 +66,8 @@ export default function App() {
     setPrompt(null);
     gwRef.current?.request("approval.respond", { session_id: sessionRef.current, choice: value }).catch(() => {
       addMsg("system", "⚠ " + (langRef.current === "de" ? "Anfrage abgelaufen." : "Request expired."));
+      // F2: a dead respond must not leave the sphere stuck in "thinking"
+      setState("idle");
     });
   }, [addMsg]);
 
@@ -71,10 +75,17 @@ export default function App() {
     const p = promptRef.current;
     if (!p) return;
     stopSpeech();
-    if (p.kind === "clarify") answerClarify(p.requestId, p.choices[index] ?? "");
-    else answerApproval(APPROVAL_VALUES[index] ?? "deny");
+    if (p.kind === "clarify") {
+      // F3: record the chosen clarification label in the transcript
+      addMsg("user", p.choices[index] ?? "");
+      answerClarify(p.requestId, p.choices[index] ?? "");
+    } else {
+      // F3: record the chosen approval label in the transcript
+      addMsg("user", approvalChoices(langRef.current)[index] ?? "");
+      answerApproval(APPROVAL_VALUES[index] ?? "deny");
+    }
     setState("thinking");
-  }, [answerClarify, answerApproval, stopSpeech]);
+  }, [answerClarify, answerApproval, stopSpeech, addMsg]);
 
   useEffect(() => {
     const gw = new GatewayClient();
@@ -85,13 +96,26 @@ export default function App() {
       setState((s) => nextSphereState(s, ev));
       if (ev.type === "clarify.request") {
         const p = (ev as any).payload ?? {};
+        // F5: guard missing request_id — unanswerable without it
+        if (!p.request_id) {
+          console.warn("clarify.request without request_id", p);
+          return;
+        }
         setPrompt({ kind: "clarify", requestId: p.request_id, question: p.question ?? "", choices: Array.isArray(p.choices) ? p.choices : [] });
+        // F3: add question to transcript
+        addMsg("eden", p.question ?? "");
+        // F4: stop any leftover speech before speaking the prompt question
+        stopSpeech();
         enqueueSpeech(p.question ?? "");
         return;
       }
       if (ev.type === "approval.request") {
         const p = (ev as any).payload ?? {};
         setPrompt({ kind: "approval", command: p.command ?? "", description: p.description ?? "" });
+        // F3: add approval request to transcript
+        addMsg("system", (langRef.current === "de" ? "Freigabe nötig: " : "Approval needed: ") + (p.description || p.command || ""));
+        // F4: stop any leftover speech before speaking the approval prompt
+        stopSpeech();
         enqueueSpeech((langRef.current === "de" ? "Ich brauche eine Freigabe: " : "I need an approval: ") + (p.description || p.command || ""));
         return;
       }
@@ -108,6 +132,8 @@ export default function App() {
         // no message.complete will follow — recover here instead of freezing.
         // The reducer owns the state transition; this adds the transcript line.
         setToolInfo(null);
+        // F2: clear any pending prompt so the panel doesn't linger after a turn error
+        setPrompt(null);
         assistantBuf.current = "";
         speechBuf.current = "";
         spokeThisTurn.current = false;
@@ -131,6 +157,8 @@ export default function App() {
       }
       if (ev.type === "message.complete") {
         setToolInfo(null);
+        // F2: clear any pending prompt when the turn completes normally
+        setPrompt(null);
         const full = ((ev as any).payload?.text ?? assistantBuf.current).trim();
         assistantBuf.current = "";
         if (awaitingTurnStart.current) {
