@@ -1,9 +1,49 @@
+import { useEffect, useRef, useState } from "react";
 import { t, type Lang } from "../lib/i18n";
 import type { SphereState } from "../lib/sphereState";
 
 type Msg = { id: number; role: "user" | "eden" | "system"; text: string };
 
 const WHO: Record<Msg["role"], string> = { user: "DU", eden: "EDEN", system: "SYS" };
+
+function Transcript({ transcript }: { transcript: Msg[] }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true); // follow the newest message unless user scrolled up
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [transcript]);
+
+  const onScroll = () => {
+    const el = boxRef.current!;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  const toggle = (id: number) =>
+    setExpanded((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+
+  return (
+    <div className="transcript" ref={boxRef} onScroll={onScroll}>
+      {transcript.slice(-50).map((m) => (
+        <div key={m.id} className={`line ${m.role}`}>
+          <span className="who">{WHO[m.role]}</span>
+          <span
+            className={`txt ${expanded.has(m.id) ? "" : "clamp"}`}
+            onClick={() => toggle(m.id)}
+          >
+            {m.text}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function Hud({
   lang,
@@ -38,14 +78,7 @@ export function Hud({
       <div className="corner bl">MCP&nbsp;<span>WAVE&nbsp;1</span><br />VOICE&nbsp;<span>DE · EN</span></div>
       <div className="corner br">PWR&nbsp;<span>98%</span><br />NET&nbsp;<span>NOMINAL</span></div>
 
-      <div className="transcript">
-        {transcript.slice(-6).map((m) => (
-          <div key={m.id} className={`line ${m.role}`}>
-            <span className="who">{WHO[m.role]}</span>
-            <span className="txt">{m.text}</span>
-          </div>
-        ))}
-      </div>
+      <Transcript transcript={transcript} />
 
       <div className="status">
         <b>{statusText}</b>
