@@ -6,6 +6,8 @@ import { t, toolLabel, VOICE_INSTRUCTION, type Lang } from "./lib/i18n";
 import { sanitizeForSpeech, extractSentences } from "./lib/speechText";
 import { Sphere } from "./components/Sphere";
 import { Hud } from "./components/Hud";
+import { PromptPanel, approvalChoices, APPROVAL_VALUES, type PendingPrompt } from "./components/PromptPanel";
+import { matchChoice, matchYesNo } from "./lib/promptMatch";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 import { useSpeechQueue } from "./hooks/useSpeechQueue";
 import "./styles.css";
@@ -18,6 +20,9 @@ export default function App() {
   const [transcript, setTranscript] = useState<Msg[]>([]);
   const [ready, setReady] = useState(false);
   const [toolInfo, setToolInfo] = useState<{ name?: string; context?: string } | null>(null);
+  const [prompt, setPrompt] = useState<PendingPrompt | null>(null);
+  const promptRef = useRef<PendingPrompt | null>(null);
+  promptRef.current = prompt;
   const gwRef = useRef<GatewayClient | null>(null);
   const sessionRef = useRef<string | null>(null);
   const assistantBuf = useRef("");
@@ -48,6 +53,29 @@ export default function App() {
     if (clean) { enqueue(clean); spokeThisTurn.current = true; }
   }, [enqueue]);
 
+  const answerClarify = useCallback((requestId: string, answer: string) => {
+    setPrompt(null);
+    gwRef.current?.request("clarify.respond", { request_id: requestId, answer }).catch(() => {
+      addMsg("system", "⚠ " + (langRef.current === "de" ? "Anfrage abgelaufen." : "Request expired."));
+    });
+  }, [addMsg]);
+
+  const answerApproval = useCallback((value: (typeof APPROVAL_VALUES)[number]) => {
+    setPrompt(null);
+    gwRef.current?.request("approval.respond", { session_id: sessionRef.current, choice: value }).catch(() => {
+      addMsg("system", "⚠ " + (langRef.current === "de" ? "Anfrage abgelaufen." : "Request expired."));
+    });
+  }, [addMsg]);
+
+  const onPromptChoice = useCallback((index: number) => {
+    const p = promptRef.current;
+    if (!p) return;
+    stopSpeech();
+    if (p.kind === "clarify") answerClarify(p.requestId, p.choices[index] ?? "");
+    else answerApproval(APPROVAL_VALUES[index] ?? "deny");
+    setState("thinking");
+  }, [answerClarify, answerApproval, stopSpeech]);
+
   useEffect(() => {
     const gw = new GatewayClient();
     gwRef.current = gw;
@@ -55,6 +83,18 @@ export default function App() {
     gw.onAny((ev: GatewayEvent) => {
       if (!isCurrent()) return;
       setState((s) => nextSphereState(s, ev));
+      if (ev.type === "clarify.request") {
+        const p = (ev as any).payload ?? {};
+        setPrompt({ kind: "clarify", requestId: p.request_id, question: p.question ?? "", choices: Array.isArray(p.choices) ? p.choices : [] });
+        enqueueSpeech(p.question ?? "");
+        return;
+      }
+      if (ev.type === "approval.request") {
+        const p = (ev as any).payload ?? {};
+        setPrompt({ kind: "approval", command: p.command ?? "", description: p.description ?? "" });
+        enqueueSpeech((langRef.current === "de" ? "Ich brauche eine Freigabe: " : "I need an approval: ") + (p.description || p.command || ""));
+        return;
+      }
       if (ev.type === "message.start") {
         awaitingTurnStart.current = false;
       }
@@ -122,6 +162,22 @@ export default function App() {
   }, [enqueueSpeech, addMsg, fail, stopSpeech]);
 
   const submit = useCallback((text: string) => {
+    const p = promptRef.current;
+    if (p) {
+      stopSpeech();
+      addMsg("user", text);
+      if (p.kind === "clarify") {
+        const idx = matchChoice(text, p.choices, langRef.current);
+        answerClarify(p.requestId, idx !== null ? p.choices[idx] : text);
+      } else {
+        // "ja"/"nein" works regardless of the 3 panel labels; then label match; default deny
+        const yn = matchYesNo(text, langRef.current);
+        const idx = yn === "yes" ? 0 : yn === "no" ? 1 : matchChoice(text, approvalChoices(langRef.current), langRef.current);
+        answerApproval(idx !== null ? APPROVAL_VALUES[idx] : "deny");
+      }
+      setState("thinking");
+      return;
+    }
     if (!gwRef.current || !sessionRef.current) {
       fail(langRef.current === "de" ? "Sitzung noch nicht bereit — einen Moment." : "Session not ready yet — one moment.");
       return;
@@ -136,7 +192,7 @@ export default function App() {
     gwRef.current
       .request("prompt.submit", { session_id: sessionRef.current, text: VOICE_INSTRUCTION[langRef.current] + "\n\n" + text })
       .catch(() => fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."));
-  }, [addMsg, fail, stopSpeech]);
+  }, [addMsg, fail, stopSpeech, answerClarify, answerApproval]);
 
   const onMicError = useCallback((code: string) => {
     // 'no-speech'/'aborted' are normal push-to-talk outcomes; only a denied
@@ -153,7 +209,7 @@ export default function App() {
     stt.start();
   };
 
-  const displayState: SphereState = speaking ? "speaking" : stt.listening ? "listening" : state;
+  const displayState: SphereState = speaking ? "speaking" : prompt ? "listening" : stt.listening ? "listening" : state;
   const statusText = useMemo(() => {
     if (displayState === "tool" && toolInfo) return toolInfo.context || toolLabel(lang, toolInfo.name);
     return t(lang, displayState);
@@ -175,6 +231,7 @@ export default function App() {
         onPttDown={onPttDown}
         onPttUp={stt.stop}
       />
+      {prompt && <PromptPanel prompt={prompt} lang={lang} onChoice={onPromptChoice} />}
       {stt.listening && <div className="ptt-interim">{stt.interim}</div>}
     </>
   );
