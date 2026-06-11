@@ -21,6 +21,11 @@ describe("extractLinks", () => {
     expect(r.links).toEqual(["https://a.de"]);
     expect(extractLinks("nur text")).toEqual({ links: [], images: [] });
   });
+  it("treats relative /eden/images/ paths as images (locally generated)", () => {
+    const { links, images } = extractLinks("Dein Bild ist fertig. /eden/images/openai_high_20260611_abc123.png");
+    expect(images).toEqual(["/eden/images/openai_high_20260611_abc123.png"]);
+    expect(links).toEqual([]);
+  });
 });
 
 describe("applyActivityEvent", () => {

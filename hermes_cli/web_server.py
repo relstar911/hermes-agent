@@ -3658,6 +3658,22 @@ def mount_eden(application: FastAPI):
             html, headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
         )
 
+    # Generated images: image_gen plugins save to $HERMES_HOME/cache/images.
+    # Served so the EDEN activity panel can render thumbnails for local files.
+    # Loopback bind + non-secret content -> no token gate (same as assets).
+    try:
+        from hermes_constants import get_hermes_home
+
+        _images_dir = get_hermes_home() / "cache" / "images"
+        _images_dir.mkdir(parents=True, exist_ok=True)
+        application.mount(
+            "/eden/images",
+            StaticFiles(directory=_images_dir),
+            name="eden-images",
+        )
+    except Exception:
+        _eden_log.warning("EDEN images mount failed", exc_info=True)
+
     # Guarded: a build that emits index.html without assets/ must not crash
     # server startup (StaticFiles raises if the directory is missing).
     if (EDEN_DIST / "assets").is_dir():
@@ -4558,13 +4574,20 @@ def start_server(
     global _DASHBOARD_EMBEDDED_CHAT_ENABLED
     _DASHBOARD_EMBEDDED_CHAT_ENABLED = embedded_chat
 
-    # The stdio TUI gateway (tui_gateway/entry.py) runs MCP discovery at
-    # startup, but the dashboard's in-process gateway has no such path —
-    # configured MCP servers stayed connected=False until a manual
-    # /reload-mcp. Discover in the background: discover_mcp_tools() blocks
-    # up to 120s on slow servers and must not delay uvicorn binding.
+    # The stdio TUI gateway (tui_gateway/entry.py) and the classic CLI run
+    # plugin + MCP discovery at startup, but the dashboard's in-process
+    # gateway has no such path — configured MCP servers stayed
+    # connected=False until a manual /reload-mcp, and enabled plugins
+    # (e.g. image_gen providers) never registered their backends. Discover
+    # in the background: discover_mcp_tools() blocks up to 120s on slow
+    # servers and must not delay uvicorn binding.
     if embedded_chat:
-        def _discover_mcp():
+        def _discover_extensions():
+            try:
+                from hermes_cli.plugins import discover_plugins
+                discover_plugins()
+            except Exception:
+                _log.debug("plugin discovery at dashboard startup failed", exc_info=True)
             try:
                 from hermes_cli.config import read_raw_config
                 servers = (read_raw_config() or {}).get("mcp_servers")
@@ -4574,7 +4597,7 @@ def start_server(
             except Exception:
                 _log.debug("MCP discovery at dashboard startup failed", exc_info=True)
 
-        threading.Thread(target=_discover_mcp, daemon=True, name="mcp-discover").start()
+        threading.Thread(target=_discover_extensions, daemon=True, name="ext-discover").start()
 
     _LOCALHOST = ("127.0.0.1", "localhost", "::1")
     if host not in _LOCALHOST and not allow_public:

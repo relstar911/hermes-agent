@@ -29,6 +29,10 @@ describe("sanitizeForSpeech", () => {
     expect(sanitizeForSpeech("Details unter https://example.com/docs. Danach mehr.", "de"))
       .toBe("Details unter example.com. Danach mehr.");
   });
+  it("never speaks locally served image paths", () => {
+    expect(sanitizeForSpeech("Dein Bild ist fertig. /eden/images/openai_high_20260611_abc.png", "de"))
+      .toBe("Dein Bild ist fertig.");
+  });
 });
 
 describe("extractSentences", () => {

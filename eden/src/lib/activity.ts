@@ -17,15 +17,19 @@ export const MAX_ACTIVITY = 100;
 
 const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
 
-/** http(s) URLs from free text; trailing punctuation stripped; deduped. */
+/**
+ * http(s) URLs from free text; trailing punctuation stripped; deduped.
+ * Relative `/eden/images/...` paths (locally generated images served by the
+ * dashboard) land in the images bucket — same-origin <img src> works as-is.
+ */
 export function extractLinks(text: string): { links: string[]; images: string[] } {
-  const found = text.match(/https?:\/\/[^\s<>"')\]]+/g) ?? [];
+  const found = text.match(/(https?:\/\/|\/eden\/images\/)[^\s<>"')\]]+/g) ?? [];
   const links: string[] = [];
   const images: string[] = [];
   for (let url of found) {
     url = url.replace(/[.,;:!?]+$/, "");
     const path = url.split(/[?#]/)[0] ?? "";
-    const bucket = IMG_RE.test(path) ? images : links;
+    const bucket = url.startsWith("/eden/images/") || IMG_RE.test(path) ? images : links;
     if (!bucket.includes(url)) bucket.push(url);
   }
   return { links, images };

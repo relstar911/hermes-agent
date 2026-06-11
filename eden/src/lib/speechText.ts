@@ -16,6 +16,8 @@ export function sanitizeForSpeech(text: string, lang: Lang): string {
     const host = core.replace(/^https?:\/\//, "").split("/")[0];
     return host + tail;
   });
+  // locally served image paths (activity panel renders them) are never spoken
+  s = s.replace(/\/eden\/images\/[^\s]+/g, " ");
   // inline code ticks
   s = s.replace(/`([^`]*)`/g, "$1");
   // list bullets / numbering at line starts
