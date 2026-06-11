@@ -459,3 +459,26 @@ tsc 0 · 82 vitest · build 0 · 9 pytest · ws_smoke green (PONG via gpt-5.4-mi
 - OpenRouter remains configured as fallback knowledge (config `providers` keeps the key); switch back = restore `model.provider: openrouter` + `model.default: anthropic/...`.
 - **Round 6 next:** OpenAI Realtime conversation mode (gpt-realtime-2 / -mini verified available on this key) with tool delegation to the Hermes turn loop.
 
+
+---
+
+## 16. Background generation tasks + gateway-gap audit (2026-06-11)
+
+### Background tasks (user requirement: agent must stay responsive during generation and confirm when done)
+
+- **Why:** `prompt.submit` during a running turn → 4009 "session busy"; a 50s gpt-image-2 call made EDEN deaf.
+- **How:** instruction v5 — the model NEVER calls image/video generation itself; it announces in one sentence and ends the answer with a line `[AUFTRAG] <full generation task>`. The client: strips the marker from transcript + speech (delta-level suppression once the marker streams in; sanitizer backstop), calls `prompt.background` (existing gateway RPC → independent background agent), adds a running HINTERGRUND-AUFTRAG entry to the activity panel (synthetic tool.start, name `background_task`), and on `background.complete {task_id, text}` marks it done, extracts the `/eden/images/...` path or URL into a thumbnail turn entry, speaks the confirmation (direct queue enqueue — does NOT touch spokeThisTurn of a possibly-running foreground turn), and writes it to the transcript. Errors (`error:` prefix) become system messages. Superseded turns (barge-in) do not start their task.
+- **Verified E2E (scripted):** marker turn completed in 7.9s, spoken part clean; `prompt.background` → bg_…; concurrent `prompt.submit` answered "FREI" in **2.7s while the image generated**; `background.complete` delivered confirmation + path; thumbnail URL serving 200.
+- **Live finding fixed:** the model wrapped the path in backticks (code span) — `extractLinks` now strips trailing backticks, sanitizer already ate the ticks for speech.
+- **Known minor:** the gateway clears `running` shortly AFTER message.complete — a submit in that sub-second window gets "Anfrage fehlgeschlagen" (pre-existing; the client grace is the ack playback time, so users never hit it in practice).
+
+### Gateway-gap audit ("gehe den Funden nach")
+
+The dashboard's in-process gateway skips the startup work of the stdio/CLI entrypoints. Status:
+| Init | stdio/CLI | dashboard (before) | now |
+|---|---|---|---|
+| MCP discovery | entry.py / cli.py | ❌ (tools: 0) | ✅ fixed §12 |
+| Plugin discovery | cli.py import | ❌ (image_gen unavailable) | ✅ fixed §15 |
+| Cron ticker (`_start_cron_ticker`) | messaging gateway only | ❌ | **documented, not wired** — cronjobs created via EDEN only fire while `hermes gateway` runs. Wire into the dashboard startup thread if EDEN ever needs scheduled jobs. |
+| Memory curator / periodic services | messaging gateway | ❌ | same note as cron |
+
