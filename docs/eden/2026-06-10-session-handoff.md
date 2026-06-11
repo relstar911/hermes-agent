@@ -381,3 +381,33 @@ Run with `python -m hermes_cli.main dashboard --tui --no-open`, open `http://127
 - **`XAI_API_KEY`** is optional. Set in `~/.hermes/.env` to enable the `x_search` tool for X/Twitter search via Grok.
 - **Higgsfield image/video** — WORKING since the web_server MCP-discovery fix (see above). OAuth is hosted-MCP; if it ever expires, `hermes mcp login higgsfield` re-auths.
 - **`npm run dev`** (Vite at :5173) still lacks token injection — use the built bundle (`npm --prefix eden run build` then dashboard) for all live testing.
+
+---
+
+## 13. Round 4 (2026-06-11): reliable & in character
+
+**Spec:** `docs/eden/2026-06-11-voice-ux-round4-design.md` · 4 code tasks + controller task, subagent-driven with two-stage reviews. Gates at HEAD: tsc 0 · **71 vitest** · build 0 · 5 pytest · 105 tts-tool pytest · live WS smoke green.
+
+### What shipped
+
+- **Auto-reconnect** (the flight-search root cause): `gatewayClient.ts` gained a `closing` flag (deliberate `close()` no longer broadcasts "closed"); App listens via `gw.onState` — on drop it resets turn state, PTT disables, transcript shows "Verbindung verloren — verbinde neu…", then reconnects with 1s→10s backoff (infinite), creates a fresh session and announces "Verbindung wiederhergestellt."
+- **TTS language forced** (the accent root cause): client sends `language: "de"|"en"` with every TTS request (speech queue via `getLang` ref + ack/filler prefetch); `/api/eden/tts` passes it as `text_to_speech_tool(text, path, language_code)`; ElevenLabs `convert()` receives `language_code` only when set (other providers ignore it). Verified live: 200/audio-mpeg with `language: "de"`.
+- **In-character acks + thinking fillers:** longer persona phrases (4 acks + 3 fillers per language, 11–39 chars — also aids language detection). Fillers speak at 6s/18s after submit if no real sentence has been spoken yet (`spokeThisTurn` guard); cancelled on first delta/clarify/approval/error/complete/disconnect/failed submit.
+- **Instruction v3:** "öffne / geh auf X" routes to the browser tools (not just search); generated image/video URLs are appended bare at the end of the answer (displayed as thumbnail, stripped from speech by the sanitizer); "keine sonstigen URLs" keeps the rest URL-free.
+- **Latency config** (the thinking-pause root cause): `~/.hermes/config.yaml` → `model.default: anthropic/claude-sonnet-4.6`, `agent.reasoning_effort: low` (was opus-4.7/medium, $0.73 per simple turn). Revert by restoring those two values.
+
+### Live verification (all on the new config)
+
+- Latency: simple question → **first delta after 4.5s, complete at 6.3s** (was 20–30s on opus/medium).
+- Image gen: "futuristischer Leuchtturm" → `mcp_higgsfield_generate_image` 1.1s + `job_status` 12.8s → spoken-style answer with **bare PNG URL appended** → thumbnail path confirmed (extractLinks → images bucket).
+- WS smoke: all OK, reply PONG.
+- Reconnect: client logic review-verified (StrictMode double-mount, overlapping-chain, dead-session traps all handled); browser-level check is part of the manual smoke below.
+
+### Manual voice checklist (round 4)
+
+- [ ] Ack speaks instantly WITHOUT English accent (forced de language)
+- [ ] Long task: filler speaks ~6s in if EDEN is still silent
+- [ ] Kill + restart the dashboard with the page open → transcript shows lost/restored, PTT re-enables, next turn works
+- [ ] "Geh auf booking.com und such einen Flug nach Lissabon" → browser tools fire (visible in CDP Chrome + activity panel)
+- [ ] Generated image appears as thumbnail in the activity panel
+
