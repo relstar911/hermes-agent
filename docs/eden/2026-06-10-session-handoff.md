@@ -318,7 +318,22 @@ TOOL  done     skills_list  0.0s
 REPLY   Ich habe in meinem aktuellen Toolset leider kein Bildgenerierungs-Tool verfügbar — die `image_gen`-Kategorie ist bei mir nicht aktiviert. ...
 ```
 
-**Finding:** Image generation did NOT execute. The agent queried `skills_list` for `image_gen` (twice) and found no registered tool. The Higgsfield MCP is configured (`hermes mcp list` shows it as enabled with 35 tools) but the specific image-generation skill was not invoked — either the `VOICE_INSTRUCTION` capability hint is not sufficient to route the request, or the Higgsfield OAuth session has expired and the tool list is stale. **Not marked as passed.** Remediation: re-run `hermes mcp login higgsfield` (interactive OAuth, user action required), then retry.
+**Finding (initial):** Image generation did NOT execute — the agent had no MCP tools at all (`session.info` showed all three MCP servers `connected: false, tools: 0`).
+
+**Root cause (diagnosed same day):** the stdio TUI gateway (`tui_gateway/entry.py`) runs `discover_mcp_tools()` at startup, but the dashboard's **in-process** gateway has no such startup path — configured MCP servers were never connected; only a manual `reload.mcp` RPC (`/reload-mcp`) connected them. Higgsfield OAuth itself was fine the whole time (`hermes mcp test higgsfield` → 35 tools, 1000 ms).
+
+**Fix:** `hermes_cli/web_server.py` `start_server()` now runs MCP discovery in a background daemon thread when `embedded_chat` is on (same cold-start guard as `entry.py`; threaded because discovery can block up to 120 s and must not delay uvicorn binding).
+
+**Re-test after fix (fresh dashboard start, no manual reload) — PASSED:**
+```
+SESSION 3c89b888
+TOOL  start    mcp_higgsfield_generate_image
+TOOL  done     mcp_higgsfield_generate_image  1.0s
+TOOL  start    mcp_higgsfield_job_status
+TOOL  done     mcp_higgsfield_job_status  20.4s
+REPLY   Fertig! ... ![Sonnenuntergang über Bergen](https://d8j0ntlcm91z4.cloudfront.net/.../hf_20260611_120750_....png)
+```
+Hosted PNG URL returned → the activity panel renders it as a thumbnail (`.png` → image bucket in `extractLinks`). Fresh sessions now show `filesystem 14 / higgsfield 37 / notion 16 tools, connected: true`.
 
 **Step 5 — Narration + browsing (`ws_turn.mjs`, 300 s timeout):**
 
@@ -356,7 +371,7 @@ Run with `python -m hermes_cli.main dashboard --tui --no-open`, open `http://127
 
 - [ ] PTT release → acknowledgment audio plays instantly (before agent response starts)
 - [ ] Activity panel fills during a multi-tool research turn (web search / browser); each tool shows context, preview clip, duration
-- [ ] Thumbnail appears in activity panel for a generated image (requires Higgsfield re-auth)
+- [ ] Thumbnail appears in activity panel for a generated image (verified scripted: Higgsfield returns a hosted PNG URL)
 - [ ] "Öffne meinen Downloads-Ordner" → approval panel appears → say "Ja" → Explorer opens; activity panel shows terminal tool
 - [ ] `ws_turn.mjs` browser test: `TOOL start browser_navigate` appears, reply contains real headline
 
@@ -364,5 +379,5 @@ Run with `python -m hermes_cli.main dashboard --tui --no-open`, open `http://127
 
 - **Social-media posting** deferred — needs platform decision (X/Twitter vs. LinkedIn vs. Instagram) and OAuth app credentials. `XAI_API_KEY` enables X *search* only (read); posting requires the Twitter v2 OAuth2 PKCE flow.
 - **`XAI_API_KEY`** is optional. Set in `~/.hermes/.env` to enable the `x_search` tool for X/Twitter search via Grok.
-- **Higgsfield image/video** — tool is configured (35 tools via hosted MCP OAuth) but OAuth session may have expired. Re-run `hermes mcp login higgsfield` (user action) before image gen turns.
+- **Higgsfield image/video** — WORKING since the web_server MCP-discovery fix (see above). OAuth is hosted-MCP; if it ever expires, `hermes mcp login higgsfield` re-auths.
 - **`npm run dev`** (Vite at :5173) still lacks token injection — use the built bundle (`npm --prefix eden run build` then dashboard) for all live testing.

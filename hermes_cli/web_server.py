@@ -4512,6 +4512,24 @@ def start_server(
     global _DASHBOARD_EMBEDDED_CHAT_ENABLED
     _DASHBOARD_EMBEDDED_CHAT_ENABLED = embedded_chat
 
+    # The stdio TUI gateway (tui_gateway/entry.py) runs MCP discovery at
+    # startup, but the dashboard's in-process gateway has no such path —
+    # configured MCP servers stayed connected=False until a manual
+    # /reload-mcp. Discover in the background: discover_mcp_tools() blocks
+    # up to 120s on slow servers and must not delay uvicorn binding.
+    if embedded_chat:
+        def _discover_mcp():
+            try:
+                from hermes_cli.config import read_raw_config
+                servers = (read_raw_config() or {}).get("mcp_servers")
+                if isinstance(servers, dict) and servers:
+                    from tools.mcp_tool import discover_mcp_tools
+                    discover_mcp_tools()
+            except Exception:
+                _log.debug("MCP discovery at dashboard startup failed", exc_info=True)
+
+        threading.Thread(target=_discover_mcp, daemon=True, name="mcp-discover").start()
+
     _LOCALHOST = ("127.0.0.1", "localhost", "::1")
     if host not in _LOCALHOST and not allow_public:
         raise SystemExit(
