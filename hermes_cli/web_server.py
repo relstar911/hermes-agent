@@ -120,11 +120,12 @@ _PUBLIC_API_PATHS: frozenset = frozenset({
     "/api/dashboard/themes",
     "/api/dashboard/plugins",
     "/api/dashboard/plugins/rescan",
-    # EDEN TTS validates the session token itself (query-param OR header,
+    # EDEN TTS/STT validate the session token themselves (query-param OR header,
     # mirroring the WS endpoint) so the SPA can fetch audio with the same
     # token-passing convention. Exempt from the header-only auth middleware;
-    # the endpoint still returns 401 on a missing/invalid token.
+    # the endpoints still return 401 on a missing/invalid token.
     "/api/eden/tts",
+    "/api/eden/stt",
 })
 
 
@@ -3537,8 +3538,15 @@ _EDEN_AUDIO_TYPES = {
 }
 
 
+def _eden_stt_api_key() -> str:
+    """ELEVENLABS_API_KEY via the same env resolution the TTS tool uses."""
+    from tools.tts_tool import get_env_value
+
+    return get_env_value("ELEVENLABS_API_KEY") or ""
+
+
 def mount_eden(application: FastAPI):
-    """Register the EDEN TTS endpoint and (if built) the /eden SPA.
+    """Register the EDEN TTS/STT endpoints and (if built) the /eden SPA.
 
     Must be called BEFORE mount_spa(), which owns the root catch-all route.
     Same origin as /api/ws, so the session token + WS need no CORS handling.
@@ -3594,6 +3602,43 @@ def mount_eden(application: FastAPI):
             media_type=media_type,
             headers={"Cache-Control": "no-store"},
         )
+
+    @application.post("/api/eden/stt")
+    async def eden_stt(request: Request):
+        token = request.query_params.get("token", "") or request.headers.get(
+            "x-hermes-session-token", ""
+        )
+        if not hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        audio = await request.body()
+        # accidental PTT taps produce near-empty recordings — don't bill an API call
+        if not audio or len(audio) < 1024:
+            return JSONResponse({"error": "audio required"}, status_code=400)
+        language = (request.query_params.get("language") or "").strip() or None
+        api_key = _eden_stt_api_key()
+        if not api_key:
+            return JSONResponse({"error": "ELEVENLABS_API_KEY not set"}, status_code=503)
+        content_type = request.headers.get("content-type", "")
+
+        def _transcribe() -> str:
+            from io import BytesIO
+
+            from elevenlabs.client import ElevenLabs
+
+            buf = BytesIO(audio)
+            buf.name = "ptt.mp3" if "mpeg" in content_type else "ptt.webm"
+            kwargs = {"file": buf, "model_id": "scribe_v1", "tag_audio_events": False}
+            if language:
+                kwargs["language_code"] = language
+            result = ElevenLabs(api_key=api_key).speech_to_text.convert(**kwargs)
+            return (getattr(result, "text", "") or "").strip()
+
+        try:
+            text = await run_in_threadpool(_transcribe)
+        except Exception as exc:
+            _eden_log.warning("EDEN STT failed: %s", exc)
+            return JSONResponse({"error": "stt failed"}, status_code=502)
+        return JSONResponse({"text": text})
 
     # Static SPA mount (only if built).
     if not EDEN_DIST.exists():
