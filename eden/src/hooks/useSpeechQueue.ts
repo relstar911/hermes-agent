@@ -3,6 +3,9 @@ import { rmsFromTimeDomain } from "../lib/amplitude";
 
 const token = () => (typeof window !== "undefined" && (window as any).__HERMES_SESSION_TOKEN__) || "";
 
+/** A queued speech chunk: text to synthesize, or pre-synthesized audio bytes. */
+export type SpeechChunk = string | { audio: ArrayBuffer };
+
 /**
  * Sequential TTS playback queue. enqueue() sentences as they stream in;
  * the first plays while later ones synthesize (one-chunk prefetch).
@@ -12,7 +15,7 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
   const [speaking, setSpeaking] = useState(false);
   const amplitudeRef = useRef(0);
   const ctxRef = useRef<AudioContext | null>(null);
-  const queueRef = useRef<string[]>([]);
+  const queueRef = useRef<SpeechChunk[]>([]);
   const drainingRef = useRef(false);
   const genRef = useRef(0); // stop() bumps; stale async work checks it
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -50,6 +53,15 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
     if (!res.ok) throw new Error(`tts ${res.status}`);
     return URL.createObjectURL(await res.blob());
   }, []);
+
+  const toUrl = useCallback(
+    (chunk: SpeechChunk): Promise<string> => {
+      if (typeof chunk === "string") return synth(chunk);
+      // pre-synthesized ack audio: no network round-trip
+      return Promise.resolve(URL.createObjectURL(new Blob([chunk.audio], { type: "audio/mpeg" })));
+    },
+    [synth],
+  );
 
   const playUrl = useCallback((url: string, gen: number): Promise<void> => {
     const ctx = ensureCtx();
@@ -116,17 +128,17 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
     try {
       while (gen === genRef.current) {
         if (!prefetch) {
-          const text = queueRef.current.shift();
-          if (text === undefined) break;
-          prefetch = synth(text);
+          const chunk = queueRef.current.shift();
+          if (chunk === undefined) break;
+          prefetch = toUrl(chunk);
         }
         const url = await prefetch;
         prefetch = null;
         if (gen !== genRef.current) { URL.revokeObjectURL(url); break; }
         // prefetch the next chunk while this one plays
-        const nextText = queueRef.current.shift();
-        if (nextText !== undefined) {
-          const p = synth(nextText);
+        const nextChunk = queueRef.current.shift();
+        if (nextChunk !== undefined) {
+          const p = toUrl(nextChunk);
           p.catch(() => {}); // backstop: real handling happens when drain awaits p
           prefetch = p;
         }
@@ -147,11 +159,11 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
       // cleared the queue, so anything present is new-generation work.
       if (queueRef.current.length) void drain();
     }
-  }, [synth, playUrl]);
+  }, [toUrl, playUrl]);
 
-  const enqueue = useCallback((text: string) => {
-    if (!text.trim()) return;
-    queueRef.current.push(text);
+  const enqueue = useCallback((chunk: SpeechChunk) => {
+    if (typeof chunk === "string" && !chunk.trim()) return;
+    queueRef.current.push(chunk);
     void drain();
   }, [drain]);
 
