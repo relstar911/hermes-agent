@@ -91,9 +91,12 @@ export function Hud({
         <button
           className="chip ptt"
           disabled={!sttSupported || !pttReady}
-          onPointerDown={onPttDown}
+          onPointerDown={(e) => {
+            // capture: sliding off the button while holding must not stop recording
+            e.currentTarget.setPointerCapture(e.pointerId);
+            onPttDown();
+          }}
           onPointerUp={onPttUp}
-          onPointerLeave={onPttUp}
           onPointerCancel={onPttUp}
         >
           {sttSupported ? `🎙 ${t(lang, "ptt")}` : lang === "de" ? "STT nicht verfügbar" : "STT unavailable"}
