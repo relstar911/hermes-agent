@@ -284,3 +284,85 @@ The key in `~/.hermes/.env` is rejected by OpenRouter's own auth endpoint (`GET 
 **⛔ New user-side blocker: OpenRouter HTTP 402 "requires more credits"** — the account ran out of credits (the earlier 401 key issue was fixed; now it's balance). Top up at https://openrouter.ai/settings/credits. The platform degrades gracefully (error text is spoken).
 
 **Manual checklist for the human voice smoke (Chrome, `http://127.0.0.1:9119/eden`):** first audio starts before the answer finishes · no markdown spoken · tool context visible during research · transcript scrolls/expands · speaking mid-answer cuts old audio · "Stell mir eine Rückfrage mit zwei Optionen" → panel + spoken question, answer by click AND by voice ("die zweite") · guarded command → approval panel, "Ja"/"Nein".
+
+---
+
+## 12. Round 3 (2026-06-11): instant acks, activity panel, capabilities
+
+**Spec:** `docs/eden/2026-06-11-voice-ux-round3-design.md` · **6 tasks, TDD, subagent-driven**. Gates at HEAD: tsc 0 · **69 vitest** · build 0 · **5 pytest** · live WS smoke green.
+
+### What shipped
+
+- **Instant spoken acknowledgments:** `ackPhrases.ts` — 10 DE + 10 EN rotating phrases ("Einen Moment…", "Ich kümmere mich darum…", etc.) keyed by language. `useAcks.ts` hook: on PTT release, pre-synthesized audio chunk is enqueued immediately into `useSpeechQueue` before the agent turn starts, giving sub-200 ms perceived latency. Text fallback when TTS is unavailable. Speech queue (Round 2) was extended to accept pre-synthesized `ArrayBuffer` chunks directly (no extra round-trip).
+- **Live activity panel:** `activity.ts` data model (tool feed entries with `name`, `context`, `preview`, `duration_s`, `summary`, `imageUrl`, `linkUrl`). `ActivityPanel.tsx` component: live tool event feed with context line, 100-char preview clip, duration badge, summary on completion, link chips (URLs from summary auto-extracted), image thumbnails for image-tool outputs. Panel is collapsible (chevron toggle), hidden below 980 px viewport width. Styles in `styles.css` (Arc Cyan palette, consistent with sphere/HUD).
+- **Capability-aware `VOICE_INSTRUCTION`:** updated DE/EN system prompt prepended to every `prompt.submit` — explicitly names available capabilities: Higgsfield image/video generation, folder opening via terminal tool + approval flow, browser-based narration. This primes the model to choose the right tool and describe results in spoken style.
+- **`XAI_API_KEY` placeholder:** added to `.env.example` directly below `TAVILY_API_KEY` — optional, enables X/Twitter search via the `x_search` tool using Grok. Key at https://console.x.ai.
+- **`eden/scripts/ws_turn.mjs`:** scripted single-turn runner for live verification and regression testing. Prints `TOOL start/progress/done`, `ASK clarify/approval`, `SESSION`, `PROMPT`, `REPLY` to stdout. Usage: `node eden/scripts/ws_turn.mjs "<prompt>" [timeoutSeconds] [baseUrl]`. Requires Node 22+.
+
+### Live-verification outcomes
+
+**Step 4 — Image generation via Higgsfield (`ws_turn.mjs`, 300 s timeout):**
+
+Prompt: `Generiere ein Bild von einem Sonnenuntergang über Bergen. Sage kurz Bescheid wenn es fertig ist.`
+
+Verbatim output:
+```
+SESSION 50c68967
+PROMPT  Generiere ein Bild von einem Sonnenuntergang über Bergen. Sage kurz Bescheid wenn es fertig ist.
+TOOL  progress skills_list  image_gen
+TOOL  start    skills_list  image_gen
+TOOL  done     skills_list  0.0s
+TOOL  progress skills_list
+TOOL  start    skills_list
+TOOL  done     skills_list  0.0s
+REPLY   Ich habe in meinem aktuellen Toolset leider kein Bildgenerierungs-Tool verfügbar — die `image_gen`-Kategorie ist bei mir nicht aktiviert. ...
+```
+
+**Finding:** Image generation did NOT execute. The agent queried `skills_list` for `image_gen` (twice) and found no registered tool. The Higgsfield MCP is configured (`hermes mcp list` shows it as enabled with 35 tools) but the specific image-generation skill was not invoked — either the `VOICE_INSTRUCTION` capability hint is not sufficient to route the request, or the Higgsfield OAuth session has expired and the tool list is stale. **Not marked as passed.** Remediation: re-run `hermes mcp login higgsfield` (interactive OAuth, user action required), then retry.
+
+**Step 5 — Narration + browsing (`ws_turn.mjs`, 300 s timeout):**
+
+Prompt: `Öffne eine Nachrichtenseite im Browser und nenne mir die Top-Schlagzeile.`
+
+Verbatim output:
+```
+SESSION fce636e4
+PROMPT  Öffne eine Nachrichtenseite im Browser und nenne mir die Top-Schlagzeile.
+TOOL  progress browser_navigate  https://www.tagesschau.de
+TOOL  start    browser_navigate  https://www.tagesschau.de
+TOOL  done     browser_navigate  2.4s
+REPLY   Ich habe die Nachrichtenseite **tagesschau.de** geöffnet. Die aktuelle Top-Schlagzeile lautet:
+
+## 📰 „Was zur WM erlaubt ist – und was nicht"
+
+**Rubrik:** FAQ – Rechtliches rund um die FIFA WM 2026
+
+**Anrisstext:** „Fußball schauen im Garten bis spät in die Nacht? Und danach ab in den Autokorso? Was ist während der WM erlaubt – und was sollte man lieber bleiben lassen?" — Von M. Nordhardt und F.
+```
+
+**Finding:** Browser navigation PASSED. `browser_navigate` fired, tagesschau.de was opened (2.4 s), and a real current headline was returned in the reply. CDP Chrome (port 9222, EdenChrome profile) was required and was started before the test.
+
+### Two-browser setup reminder
+
+The agent's CDP Chrome (port 9222, `--user-data-dir=%LOCALAPPDATA%\EdenChrome`, starts on `about:blank`) is the **agent's browser** — it must NOT contain the EDEN UI tab. The EDEN UI runs in a separate regular Chrome window at `http://127.0.0.1:9119/eden`. If both are in the same browser/profile, agent navigation events overwrite the UI. Start the CDP Chrome before any browsing turn:
+```powershell
+Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList '--remote-debugging-port=9222', "--user-data-dir=$env:LOCALAPPDATA\EdenChrome", 'about:blank'
+```
+Verify: `Invoke-WebRequest -Uri "http://127.0.0.1:9222/json/version" -UseBasicParsing -TimeoutSec 3`
+
+### Manual voice checklist
+
+Run with `python -m hermes_cli.main dashboard --tui --no-open`, open `http://127.0.0.1:9119/eden` in regular Chrome:
+
+- [ ] PTT release → acknowledgment audio plays instantly (before agent response starts)
+- [ ] Activity panel fills during a multi-tool research turn (web search / browser); each tool shows context, preview clip, duration
+- [ ] Thumbnail appears in activity panel for a generated image (requires Higgsfield re-auth)
+- [ ] "Öffne meinen Downloads-Ordner" → approval panel appears → say "Ja" → Explorer opens; activity panel shows terminal tool
+- [ ] `ws_turn.mjs` browser test: `TOOL start browser_navigate` appears, reply contains real headline
+
+### Backlog
+
+- **Social-media posting** deferred — needs platform decision (X/Twitter vs. LinkedIn vs. Instagram) and OAuth app credentials. `XAI_API_KEY` enables X *search* only (read); posting requires the Twitter v2 OAuth2 PKCE flow.
+- **`XAI_API_KEY`** is optional. Set in `~/.hermes/.env` to enable the `x_search` tool for X/Twitter search via Grok.
+- **Higgsfield image/video** — tool is configured (35 tools via hosted MCP OAuth) but OAuth session may have expired. Re-run `hermes mcp login higgsfield` (user action) before image gen turns.
+- **`npm run dev`** (Vite at :5173) still lacks token injection — use the built bundle (`npm --prefix eden run build` then dashboard) for all live testing.
