@@ -264,3 +264,23 @@ The key in `~/.hermes/.env` is rejected by OpenRouter's own auth endpoint (`GET 
 
 ### What §9 (human voice smoke) needs now
 1. Fix the OpenRouter key. 2. `npm --prefix eden run build` (already built at HEAD). 3. `python -m hermes_cli.main dashboard --tui --no-open`. 4. Open `http://127.0.0.1:9119/eden`, hold PTT, speak. Everything else is verified.
+
+---
+
+## 11. Voice-UX Round 2 (2026-06-11) — fluency, transparency, interactivity
+
+**Spec:** `docs/eden/2026-06-10-voice-ux-round2-design.md` · **Plan:** `docs/eden/plans/2026-06-10-voice-ux-round2-implementation.md` · **14 commits** (subagent-driven, two-stage review per task + final integration review: READY). Gates at HEAD: tsc 0 · **43 vitest** · build 0 · **5 pytest** · live WS smoke green.
+
+**Built (all in `eden/`, zero backend changes):**
+- **Sentence-streaming TTS:** `speechText.ts` (sanitizer + fence/list-aware splitter, 18 tests) + `useSpeechQueue.ts` (sequential playback, one-chunk prefetch, generation-counter barge-in) — first audio after the first sentence (~1.0–1.6 s warm with `eleven_flash_v2_5`, measured), not after the full answer.
+- **Voice style:** `VOICE_INSTRUCTION` (DE/EN) prepended to every prompt.submit — 1–4 spoken sentences, no markdown; sanitizer as second line of defense (URLs→host, code skipped, emoji silent).
+- **Tool transparency:** status line shows `tool.start` context/name ("DURCHSUCHT DAS WEB…") while the sphere is in tool state.
+- **Transcript:** last 50 messages, scrollable with sticky-bottom, 3-line clamp + click-to-expand.
+- **Interactivity:** `clarify.request`/`approval.request` → spoken question + Arc-Cyan prompt panel; answer by chip click or voice (`promptMatch.ts`: whole-word ja/nein with negation-first — "not sure" can NOT false-approve; ordinals DE/EN; free text for clarify; default deny). Responds via `clarify.respond {request_id, answer}` / `approval.respond {session_id, choice}`. Prompt cleaned up on turn end/error; respond-expiry shows "Anfrage abgelaufen".
+- Config: `tts.elevenlabs.model_id: eleven_flash_v2_5` (quality alternative: eleven_multilingual_v2).
+
+**Known-accepted (Low):** prompt question speech suppresses the no-delta speak fallback for that turn; superseded-turn prompts after barge-in still show briefly; panel lingers if server times out a clarify mid-stream (4009 path covers it); `#` stripped globally ("C#" → "C").
+
+**⛔ New user-side blocker: OpenRouter HTTP 402 "requires more credits"** — the account ran out of credits (the earlier 401 key issue was fixed; now it's balance). Top up at https://openrouter.ai/settings/credits. The platform degrades gracefully (error text is spoken).
+
+**Manual checklist for the human voice smoke (Chrome, `http://127.0.0.1:9119/eden`):** first audio starts before the answer finishes · no markdown spoken · tool context visible during research · transcript scrolls/expands · speaking mid-answer cuts old audio · "Stell mir eine Rückfrage mit zwei Optionen" → panel + spoken question, answer by click AND by voice ("die zweite") · guarded command → approval panel, "Ja"/"Nein".
