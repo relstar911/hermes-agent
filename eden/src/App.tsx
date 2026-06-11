@@ -10,6 +10,9 @@ import { PromptPanel, approvalChoices, APPROVAL_VALUES, type PendingPrompt } fro
 import { matchChoice, matchYesNo } from "./lib/promptMatch";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 import { useSpeechQueue } from "./hooks/useSpeechQueue";
+import { ActivityPanel } from "./components/ActivityPanel";
+import { applyActivityEvent, type ActivityEntry } from "./lib/activity";
+import { useAcks } from "./hooks/useAcks";
 import "./styles.css";
 
 type Msg = { id: number; role: "user" | "eden" | "system"; text: string };
@@ -21,6 +24,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [toolInfo, setToolInfo] = useState<{ name?: string; context?: string } | null>(null);
   const [prompt, setPrompt] = useState<PendingPrompt | null>(null);
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const promptRef = useRef<PendingPrompt | null>(null);
   promptRef.current = prompt;
   const gwRef = useRef<GatewayClient | null>(null);
@@ -44,6 +48,7 @@ export default function App() {
   }, [fail]);
 
   const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError);
+  const speakAck = useAcks(lang, ready, enqueue);
   const speechBuf = useRef("");
   const spokeThisTurn = useRef(false);
   const awaitingTurnStart = useRef(false);
@@ -94,6 +99,7 @@ export default function App() {
     gw.onAny((ev: GatewayEvent) => {
       if (!isCurrent()) return;
       setState((s) => nextSphereState(s, ev));
+      setActivity((a) => applyActivityEvent(a, ev));
       if (ev.type === "clarify.request") {
         const p = (ev as any).payload ?? {};
         // F5: guard missing request_id — unanswerable without it
@@ -211,6 +217,7 @@ export default function App() {
       return;
     }
     stopSpeech();
+    speakAck(); // instant "Jawohl." — plays while the LLM thinks
     assistantBuf.current = "";
     awaitingTurnStart.current = true;
     speechBuf.current = "";
@@ -220,7 +227,7 @@ export default function App() {
     gwRef.current
       .request("prompt.submit", { session_id: sessionRef.current, text: VOICE_INSTRUCTION[langRef.current] + "\n\n" + text })
       .catch(() => fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."));
-  }, [addMsg, fail, stopSpeech, answerClarify, answerApproval]);
+  }, [addMsg, fail, stopSpeech, answerClarify, answerApproval, speakAck]);
 
   const onMicError = useCallback((code: string) => {
     // 'no-speech'/'aborted' are normal push-to-talk outcomes; only a denied
@@ -259,6 +266,7 @@ export default function App() {
         onPttDown={onPttDown}
         onPttUp={stt.stop}
       />
+      <ActivityPanel entries={activity} lang={lang} />
       {prompt && <PromptPanel prompt={prompt} lang={lang} onChoice={onPromptChoice} />}
       {stt.listening && <div className="ptt-interim">{stt.interim}</div>}
     </>
