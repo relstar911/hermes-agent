@@ -9,7 +9,9 @@ import { Hud } from "./components/Hud";
 import { PromptPanel, approvalChoices, APPROVAL_VALUES, type PendingPrompt } from "./components/PromptPanel";
 import { matchChoice, matchYesNo } from "./lib/promptMatch";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
+import { useRecorder } from "./hooks/useRecorder";
 import { useSpeechQueue } from "./hooks/useSpeechQueue";
+import { transcribe, pickTranscript } from "./lib/sttClient";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { applyActivityEvent, type ActivityEntry } from "./lib/activity";
 import { useAcks } from "./hooks/useAcks";
@@ -293,12 +295,38 @@ export default function App() {
     }
   }, [fail]);
 
-  const stt = useSpeechRecognition(lang, submit, onMicError);
+  const sttFallback = useRef("");
+  const onSpeechFinal = useCallback((text: string) => { sttFallback.current = text; }, []);
+  const stt = useSpeechRecognition(lang, onSpeechFinal, onMicError);
+  const recorder = useRecorder();
 
   const onPttDown = () => {
     prime(); // unlock the AudioContext on the user gesture (Chrome autoplay policy)
+    sttFallback.current = "";
+    void recorder.start(); // lazy mic acquisition; fire-and-forget
     stt.start();
   };
+
+  const onPttUp = useCallback(async () => {
+    stt.stop();
+    const blob = await recorder.stop();
+    if (blob) setState("thinking"); // immediate feedback while Scribe runs (~1s)
+    const scribe = blob ? await transcribe(blob, langRef.current) : null;
+    if (!scribe) {
+      // Web Speech finalizes asynchronously after stop() — give it a moment
+      for (let i = 0; i < 15 && !sttFallback.current; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    const text = pickTranscript(scribe, sttFallback.current);
+    sttFallback.current = "";
+    if (text) {
+      submit(text);
+    } else if (blob) {
+      setState("idle");
+      addMsg("system", langRef.current === "de" ? "Nicht verstanden — bitte noch einmal." : "Didn't catch that — please try again.");
+    }
+  }, [stt, recorder, submit, addMsg]);
 
   const displayState: SphereState = speaking ? "speaking" : prompt ? "listening" : stt.listening ? "listening" : state;
   const statusText = useMemo(() => {
@@ -320,7 +348,7 @@ export default function App() {
         sttSupported={stt.supported}
         pttReady={ready}
         onPttDown={onPttDown}
-        onPttUp={stt.stop}
+        onPttUp={onPttUp}
       />
       <ActivityPanel entries={activity} lang={lang} />
       {prompt && <PromptPanel prompt={prompt} lang={lang} onChoice={onPromptChoice} />}
