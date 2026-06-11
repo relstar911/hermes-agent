@@ -25,7 +25,7 @@ describe("ackPhrases", () => {
       seen.push(next);
       idx = next;
     }
-    expect(new Set(seen.slice(0, 4)).size).toBe(4); // full coverage before repeating
+    expect(new Set(seen.slice(0, 4)).size).toBe(4); // sequential rotation covers all indices once per cycle
   });
 
   it("is safe for zero/one-phrase edge cases", () => {
