@@ -795,7 +795,7 @@ async def _generate_edge_tts(text: str, output_path: str, tts_config: Dict[str, 
 # ===========================================================================
 # Provider: ElevenLabs (premium)
 # ===========================================================================
-def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any], language_code: Optional[str] = None) -> str:
     """
     Generate audio using ElevenLabs.
 
@@ -803,6 +803,7 @@ def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any]
         text: Text to convert.
         output_path: Where to save the audio file.
         tts_config: TTS config dict.
+        language_code: Optional BCP-47/ISO-639 language hint (e.g. "de").
 
     Returns:
         Path to the saved audio file.
@@ -823,12 +824,16 @@ def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any]
 
     ElevenLabs = _import_elevenlabs()
     client = ElevenLabs(api_key=api_key)
-    audio_generator = client.text_to_speech.convert(
+    convert_kwargs = dict(
         text=text,
         voice_id=voice_id,
         model_id=model_id,
         output_format=output_format,
     )
+    lang = language_code or el_config.get("language_code")
+    if lang:
+        convert_kwargs["language_code"] = str(lang)
+    audio_generator = client.text_to_speech.convert(**convert_kwargs)
 
     # audio_generator yields chunks -- write them all
     with open(output_path, "wb") as f:
@@ -1621,6 +1626,7 @@ def _generate_kittentts(text: str, output_path: str, tts_config: Dict[str, Any])
 def text_to_speech_tool(
     text: str,
     output_path: Optional[str] = None,
+    language_code: Optional[str] = None,
 ) -> str:
     """
     Convert text to speech audio.
@@ -1635,6 +1641,7 @@ def text_to_speech_tool(
     Args:
         text: The text to convert to speech.
         output_path: Optional custom save path. Defaults to ~/voice-memos/<timestamp>.mp3
+        language_code: Optional BCP-47/ISO-639 hint (e.g. "de"); currently honored by the ElevenLabs provider, ignored elsewhere.
 
     Returns:
         str: JSON result with success, file_path, and optionally MEDIA tag.
@@ -1716,7 +1723,7 @@ def text_to_speech_tool(
                     "error": "ElevenLabs provider selected but 'elevenlabs' package not installed. Run: pip install elevenlabs"
                 }, ensure_ascii=False)
             logger.info("Generating speech with ElevenLabs...")
-            _generate_elevenlabs(text, file_str, tts_config)
+            _generate_elevenlabs(text, file_str, tts_config, language_code=language_code)
 
         elif provider == "openai":
             try:

@@ -3559,12 +3559,13 @@ def mount_eden(application: FastAPI):
         except Exception:
             body = {}
         text = (body.get("text") or "").strip()
+        language = (body.get("language") or "").strip() or None
         if not text:
             return JSONResponse({"error": "text required"}, status_code=400)
         from tools.tts_tool import text_to_speech_tool
 
         out_path = Path(tempfile.gettempdir()) / f"eden_tts_{secrets.token_hex(8)}.mp3"
-        raw = await run_in_threadpool(text_to_speech_tool, text, str(out_path))
+        raw = await run_in_threadpool(text_to_speech_tool, text, str(out_path), language)
         try:
             data = json.loads(raw)
         except Exception:
