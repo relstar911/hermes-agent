@@ -27,12 +27,23 @@ export function extractLinks(text: string): { links: string[]; images: string[] 
   const links: string[] = [];
   const images: string[] = [];
   for (let url of found) {
-    url = url.replace(/[.,;:!?]+$/, "");
+    url = url.replace(/[.,;:!?`]+$/, "");
     const path = url.split(/[?#]/)[0] ?? "";
     const bucket = url.startsWith("/eden/images/") || IMG_RE.test(path) ? images : links;
     if (!bucket.includes(url)) bucket.push(url);
   }
   return { links, images };
+}
+
+/** Marker the model appends to hand a long generation off to the background. */
+export const TASK_MARKER = "[AUFTRAG]";
+
+/** Split a trailing [AUFTRAG] background-task marker from answer text. */
+export function splitTaskMarker(text: string): { clean: string; task: string | null } {
+  const idx = text.indexOf(TASK_MARKER);
+  if (idx < 0) return { clean: text.trim(), task: null };
+  const task = text.slice(idx + TASK_MARKER.length).trim();
+  return { clean: text.slice(0, idx).trim(), task: task || null };
 }
 
 let turnSeq = 0; // display keys only — tests must not assert exact turn ids
@@ -89,6 +100,23 @@ export function applyActivityEvent(entries: ActivityEntry[], ev: GatewayEvent): 
       return entries.map((e) =>
         e.kind === "tool" && e.status === "running" ? { ...e, status: "error" as const } : e,
       );
+    case "background.complete": {
+      // Finishes ONLY the matching background entry — running tools of a
+      // concurrent foreground turn must stay untouched.
+      const id = String(p.task_id ?? "");
+      const text = String(p.text ?? "");
+      const isError = text.startsWith("error:");
+      const finished = entries.map((e) =>
+        e.kind === "tool" && e.id === id
+          ? { ...e, status: isError ? ("error" as const) : ("done" as const), summary: isError ? text : e.summary }
+          : e,
+      );
+      if (isError) return finished;
+      const { links, images } = extractLinks(text);
+      if (!links.length && !images.length) return finished;
+      const turn: TurnEntry = { kind: "turn", id: `turn-${++turnSeq}`, links, images };
+      return cap([...finished, turn]);
+    }
     case "message.complete": {
       const finished = entries.map((e) =>
         e.kind === "tool" && e.status === "running" ? { ...e, status: "done" as const } : e,

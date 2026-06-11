@@ -18,6 +18,8 @@ export function sanitizeForSpeech(text: string, lang: Lang): string {
   });
   // locally served image paths (activity panel renders them) are never spoken
   s = s.replace(/\/eden\/images\/[^\s]+/g, " ");
+  // background-task marker and everything after it is protocol, never speech
+  s = s.replace(/\[AUFTRAG\][\s\S]*$/i, " ");
   // inline code ticks
   s = s.replace(/`([^`]*)`/g, "$1");
   // list bullets / numbering at line starts

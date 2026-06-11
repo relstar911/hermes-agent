@@ -33,6 +33,10 @@ describe("sanitizeForSpeech", () => {
     expect(sanitizeForSpeech("Dein Bild ist fertig. /eden/images/openai_high_20260611_abc.png", "de"))
       .toBe("Dein Bild ist fertig.");
   });
+  it("never speaks the background-task marker or anything after it", () => {
+    expect(sanitizeForSpeech("Ich starte das. [AUFTRAG] Generiere mit image_generate: Kolibri. Antworte mit dem Pfad.", "de"))
+      .toBe("Ich starte das.");
+  });
 });
 
 describe("extractSentences", () => {

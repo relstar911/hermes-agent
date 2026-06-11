@@ -13,7 +13,7 @@ import { useRecorder } from "./hooks/useRecorder";
 import { useSpeechQueue } from "./hooks/useSpeechQueue";
 import { transcribe, pickTranscript } from "./lib/sttClient";
 import { ActivityPanel } from "./components/ActivityPanel";
-import { applyActivityEvent, type ActivityEntry } from "./lib/activity";
+import { applyActivityEvent, splitTaskMarker, type ActivityEntry } from "./lib/activity";
 import { useAcks } from "./hooks/useAcks";
 import "./styles.css";
 
@@ -54,6 +54,7 @@ export default function App() {
   const speechBuf = useRef("");
   const spokeThisTurn = useRef(false);
   const awaitingTurnStart = useRef(false);
+  const taskMarkerSeen = useRef(false); // [AUFTRAG] seen mid-stream: stop speaking deltas
   const fillerTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const clearFillers = useCallback(() => {
     for (const t of fillerTimers.current) clearTimeout(t);
@@ -81,6 +82,24 @@ export default function App() {
       // F2: a dead respond must not leave the sphere stuck in "thinking"
       setState("idle");
     });
+  }, [addMsg]);
+
+  const startBackgroundTask = useCallback((task: string) => {
+    const gw = gwRef.current;
+    const sid = sessionRef.current;
+    if (!gw || !sid) return;
+    gw.request<{ task_id: string }>("prompt.background", { session_id: sid, text: task })
+      .then(({ task_id }) => {
+        setActivity((a) =>
+          applyActivityEvent(a, {
+            type: "tool.start",
+            payload: { tool_id: task_id, name: "background_task", context: task.slice(0, 80) },
+          } as GatewayEvent),
+        );
+      })
+      .catch(() =>
+        addMsg("system", "⚠ " + (langRef.current === "de" ? "Hintergrund-Auftrag konnte nicht gestartet werden." : "Background task could not be started.")),
+      );
   }, [addMsg]);
 
   const onPromptChoice = useCallback((index: number) => {
@@ -134,6 +153,23 @@ export default function App() {
         enqueueSpeech((langRef.current === "de" ? "Ich brauche eine Freigabe: " : "I need an approval: ") + (p.description || p.command || ""));
         return;
       }
+      if (ev.type === "background.complete") {
+        // Finished background generation: confirm in transcript + speech.
+        // The reducer (fed above) already marked the panel entry done and
+        // extracted the image thumbnail.
+        const p = (ev as any).payload ?? {};
+        const text = String(p.text ?? "").trim();
+        if (text.startsWith("error:")) {
+          addMsg("system", "⚠ " + (langRef.current === "de" ? "Hintergrund-Auftrag fehlgeschlagen. " : "Background task failed. ") + text);
+        } else if (text) {
+          addMsg("eden", text);
+          // speak directly via the queue — must NOT set spokeThisTurn, a
+          // foreground turn may be running concurrently
+          const clean = sanitizeForSpeech(text, langRef.current);
+          if (clean) enqueue(clean);
+        }
+        return;
+      }
       if (ev.type === "message.start") {
         awaitingTurnStart.current = false;
       }
@@ -154,6 +190,7 @@ export default function App() {
         speechBuf.current = "";
         spokeThisTurn.current = false;
         awaitingTurnStart.current = false;
+        taskMarkerSeen.current = false;
         stopSpeech();
         const detail = String((ev as any).payload?.message ?? (ev as any).payload?.error ?? "");
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Agent-Fehler. " : "Agent error. ") + detail);
@@ -164,10 +201,18 @@ export default function App() {
         clearFillers();
         const delta = (ev as any).payload?.text ?? "";
         assistantBuf.current += delta;
-        speechBuf.current += delta;
-        const { sentences, rest } = extractSentences(speechBuf.current);
-        speechBuf.current = rest;
-        for (const s of sentences) enqueueSpeech(s);
+        if (!taskMarkerSeen.current) {
+          speechBuf.current += delta;
+          // everything from the [AUFTRAG] marker on is protocol — never spoken
+          const markerIdx = speechBuf.current.indexOf("[AUFTRAG]");
+          if (markerIdx >= 0) {
+            taskMarkerSeen.current = true;
+            speechBuf.current = speechBuf.current.slice(0, markerIdx);
+          }
+          const { sentences, rest } = extractSentences(speechBuf.current);
+          speechBuf.current = rest;
+          for (const s of sentences) enqueueSpeech(s);
+        }
       }
       if (ev.type === "tool.complete" && (ev as any).payload?.error) {
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Tool-Fehler: " : "Tool error: ") + (ev as any).payload.error);
@@ -177,10 +222,13 @@ export default function App() {
         setToolInfo(null);
         // F2: clear any pending prompt when the turn completes normally
         setPrompt(null);
-        const full = ((ev as any).payload?.text ?? assistantBuf.current).trim();
+        const fullRaw = ((ev as any).payload?.text ?? assistantBuf.current).trim();
+        const { clean: full, task } = splitTaskMarker(fullRaw);
         assistantBuf.current = "";
+        taskMarkerSeen.current = false;
         if (awaitingTurnStart.current) {
-          // superseded turn finishing after barge-in: transcript yes, speech no
+          // superseded turn finishing after barge-in: transcript yes, speech
+          // no — and its background task is NOT started (user moved on)
           if (full) addMsg("eden", full);
           return;
         }
@@ -192,6 +240,7 @@ export default function App() {
           if (!spokeThisTurn.current) enqueueSpeech(full);
         }
         spokeThisTurn.current = false;
+        if (task) startBackgroundTask(task);
       }
     });
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -226,6 +275,7 @@ export default function App() {
         speechBuf.current = "";
         assistantBuf.current = "";
         spokeThisTurn.current = false;
+        taskMarkerSeen.current = false;
         setState("error");
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Verbindung verloren — verbinde neu…" : "Connection lost — reconnecting…"));
         reconnectTimer = setTimeout(() => void reconnect(), 1000);
@@ -247,7 +297,7 @@ export default function App() {
       clearFillers();
       gw.close();
     };
-  }, [enqueueSpeech, addMsg, fail, stopSpeech, clearFillers]);
+  }, [enqueueSpeech, addMsg, fail, stopSpeech, clearFillers, startBackgroundTask, enqueue]);
 
   const submit = useCallback((text: string) => {
     const p = promptRef.current;
@@ -280,6 +330,7 @@ export default function App() {
     awaitingTurnStart.current = true;
     speechBuf.current = "";
     spokeThisTurn.current = false;
+    taskMarkerSeen.current = false;
     addMsg("user", text);
     setState("thinking");
     gwRef.current
