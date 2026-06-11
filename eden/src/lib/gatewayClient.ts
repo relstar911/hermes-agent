@@ -52,6 +52,7 @@ export class GatewayClient {
   private listeners = new Map<string, Set<(ev: GatewayEvent) => void>>();
   private _state: ConnectionState = "idle";
   private stateListeners = new Set<(s: ConnectionState) => void>();
+  private closing = false;
 
   get state(): ConnectionState {
     return this._state;
@@ -90,6 +91,7 @@ export class GatewayClient {
 
   async connect(token?: string): Promise<void> {
     if (this._state === "open" || this._state === "connecting") return;
+    this.closing = false;
     this.setState("connecting");
 
     const resolved = token ?? window.__HERMES_SESSION_TOKEN__ ?? "";
@@ -119,8 +121,9 @@ export class GatewayClient {
     });
 
     ws.addEventListener("close", () => {
-      this.setState("closed");
       this.rejectAllPending(new Error("WebSocket closed"));
+      if (this.closing) return;       // deliberate close — no "closed" broadcast
+      this.setState("closed");
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -140,6 +143,7 @@ export class GatewayClient {
   }
 
   close() {
+    this.closing = true;
     this.ws?.close();
     this.ws = null;
   }

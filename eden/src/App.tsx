@@ -48,10 +48,15 @@ export default function App() {
   }, [fail]);
 
   const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError, () => langRef.current);
-  const { speakAck, speakFiller: _speakFiller } = useAcks(lang, ready, enqueue);
+  const { speakAck, speakFiller } = useAcks(lang, ready, enqueue);
   const speechBuf = useRef("");
   const spokeThisTurn = useRef(false);
   const awaitingTurnStart = useRef(false);
+  const fillerTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clearFillers = useCallback(() => {
+    for (const t of fillerTimers.current) clearTimeout(t);
+    fillerTimers.current = [];
+  }, []);
 
   const enqueueSpeech = useCallback((raw: string) => {
     const clean = sanitizeForSpeech(raw, langRef.current);
@@ -101,6 +106,7 @@ export default function App() {
       setState((s) => nextSphereState(s, ev));
       setActivity((a) => applyActivityEvent(a, ev));
       if (ev.type === "clarify.request") {
+        clearFillers();
         const p = (ev as any).payload ?? {};
         // F5: guard missing request_id — unanswerable without it
         if (!p.request_id) {
@@ -116,6 +122,7 @@ export default function App() {
         return;
       }
       if (ev.type === "approval.request") {
+        clearFillers();
         const p = (ev as any).payload ?? {};
         setPrompt({ kind: "approval", command: p.command ?? "", description: p.description ?? "" });
         // F3: add approval request to transcript
@@ -134,6 +141,7 @@ export default function App() {
       }
       if (ev.type === "tool.complete") setToolInfo(null);
       if (ev.type === "error") {
+        clearFillers();
         // Server-side turn failure (provider down, rate limit, tool crash):
         // no message.complete will follow — recover here instead of freezing.
         // The reducer owns the state transition; this adds the transcript line.
@@ -151,6 +159,7 @@ export default function App() {
       }
       if (ev.type === "message.delta") {
         if (awaitingTurnStart.current) return; // stale delta from superseded turn — discard
+        clearFillers();
         const delta = (ev as any).payload?.text ?? "";
         assistantBuf.current += delta;
         speechBuf.current += delta;
@@ -162,6 +171,7 @@ export default function App() {
         addMsg("system", "⚠ " + (langRef.current === "de" ? "Tool-Fehler: " : "Tool error: ") + (ev as any).payload.error);
       }
       if (ev.type === "message.complete") {
+        clearFillers();
         setToolInfo(null);
         // F2: clear any pending prompt when the turn completes normally
         setPrompt(null);
@@ -182,6 +192,43 @@ export default function App() {
         spokeThisTurn.current = false;
       }
     });
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const reconnect = async () => {
+      if (!isCurrent()) return;
+      try {
+        await gw.connect();
+        const res = await gw.request<{ session_id: string }>("session.create", { cols: 80 });
+        if (!isCurrent()) return;
+        sessionRef.current = res.session_id;
+        attempt = 0;
+        setReady(true);
+        setState("idle");
+        addMsg("system", langRef.current === "de" ? "Verbindung wiederhergestellt." : "Connection restored.");
+      } catch {
+        if (!isCurrent()) return;
+        attempt += 1;
+        const delay = Math.min(1000 * 2 ** attempt, 10000);
+        reconnectTimer = setTimeout(() => void reconnect(), delay);
+      }
+    };
+    const offState = gw.onState((s) => {
+      if (!isCurrent()) return;
+      if (s === "closed") {
+        setReady(false);
+        setPrompt(null);
+        setToolInfo(null);
+        stopSpeech();
+        clearFillers();
+        awaitingTurnStart.current = false;
+        speechBuf.current = "";
+        assistantBuf.current = "";
+        spokeThisTurn.current = false;
+        setState("error");
+        addMsg("system", "⚠ " + (langRef.current === "de" ? "Verbindung verloren — verbinde neu…" : "Connection lost — reconnecting…"));
+        reconnectTimer = setTimeout(() => void reconnect(), 1000);
+      }
+    });
     (async () => {
       await gw.connect();
       const res = await gw.request<{ session_id: string }>("session.create", { cols: 80 });
@@ -192,8 +239,13 @@ export default function App() {
     })().catch(() => {
       if (isCurrent()) fail(langRef.current === "de" ? "Verbindung zum Agenten fehlgeschlagen." : "Connection to agent failed.");
     });
-    return () => gw.close();
-  }, [enqueueSpeech, addMsg, fail, stopSpeech]);
+    return () => {
+      offState();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      clearFillers();
+      gw.close();
+    };
+  }, [enqueueSpeech, addMsg, fail, stopSpeech, clearFillers]);
 
   const submit = useCallback((text: string) => {
     const p = promptRef.current;
@@ -218,6 +270,10 @@ export default function App() {
     }
     stopSpeech();
     speakAck(); // instant "Jawohl." — plays while the LLM thinks
+    clearFillers();
+    fillerTimers.current = [6000, 18000].map((ms) =>
+      setTimeout(() => { if (!spokeThisTurn.current) speakFiller(); }, ms),
+    );
     assistantBuf.current = "";
     awaitingTurnStart.current = true;
     speechBuf.current = "";
@@ -227,7 +283,7 @@ export default function App() {
     gwRef.current
       .request("prompt.submit", { session_id: sessionRef.current, text: VOICE_INSTRUCTION[langRef.current] + "\n\n" + text })
       .catch(() => fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."));
-  }, [addMsg, fail, stopSpeech, answerClarify, answerApproval, speakAck]);
+  }, [addMsg, fail, stopSpeech, answerClarify, answerApproval, speakAck, speakFiller, clearFillers]);
 
   const onMicError = useCallback((code: string) => {
     // 'no-speech'/'aborted' are normal push-to-talk outcomes; only a denied
