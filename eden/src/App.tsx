@@ -296,11 +296,13 @@ export default function App() {
   }, [fail]);
 
   const sttFallback = useRef("");
+  const pttGen = useRef(0); // each hold gets an id; stale async onPttUp work is abandoned
   const onSpeechFinal = useCallback((text: string) => { sttFallback.current = text; }, []);
   const stt = useSpeechRecognition(lang, onSpeechFinal, onMicError);
   const recorder = useRecorder();
 
   const onPttDown = () => {
+    pttGen.current++;
     prime(); // unlock the AudioContext on the user gesture (Chrome autoplay policy)
     sttFallback.current = "";
     void recorder.start(); // lazy mic acquisition; fire-and-forget
@@ -308,16 +310,20 @@ export default function App() {
   };
 
   const onPttUp = useCallback(async () => {
+    const gen = pttGen.current;
     stt.stop();
     const blob = await recorder.stop();
+    if (pttGen.current !== gen) return;
     if (blob) setState("thinking"); // immediate feedback while Scribe runs (~1s)
     const scribe = blob ? await transcribe(blob, langRef.current) : null;
+    if (pttGen.current !== gen) return;
     if (!scribe) {
       // Web Speech finalizes asynchronously after stop() — give it a moment
-      for (let i = 0; i < 15 && !sttFallback.current; i++) {
+      for (let i = 0; i < 15 && !sttFallback.current && pttGen.current === gen; i++) {
         await new Promise((r) => setTimeout(r, 100));
       }
     }
+    if (pttGen.current !== gen) return;
     const text = pickTranscript(scribe, sttFallback.current);
     sttFallback.current = "";
     if (text) {
