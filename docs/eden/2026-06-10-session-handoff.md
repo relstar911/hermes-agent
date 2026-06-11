@@ -434,3 +434,28 @@ TTS→STT roundtrip: synthesized "Öffne bitte den Browser und suche nach Flüge
 - Chrome shows a persistent mic-in-use indicator after the first PTT (stream is kept) — accepted design tradeoff.
 - Scribe cost ≈ 0.4 ct/audio-minute on the existing ELEVENLABS_API_KEY.
 
+
+---
+
+## 15. Stage 1 OpenAI binding (2026-06-11)
+
+User decision: bind cost-bearing nodes to the funded OpenAI API; ElevenLabs (TTS/STT), Tavily, browser stay. Round 6 (Realtime conversation mode) approved as next step.
+
+### What changed
+
+- **Main model:** `~/.hermes/config.yaml` → custom provider `openai-direct` (`base_url: https://api.openai.com/v1`, `key_env: OPENAI_API_KEY`), `model.provider: openai-direct`, `model.default: gpt-5.4-mini`. Transport (Responses API) auto-detected from the api.openai.com hostname. Measured: cold first delta 14s (prompt cache cold), **warm 2.5-2.6s** (better than sonnet-4.6's 4.5s via OpenRouter).
+- **Image generation:** plugin `image_gen/openai` enabled + `image_gen.provider: openai` in config (REQUIRED — without it the tool stays on the legacy FAL path and reports "unavailable"). Verified live: gpt-image-2 medium, 53s, saved under `~/.hermes/cache/images/`.
+- **Dashboard startup thread** (web_server.py) now runs `discover_plugins()` before MCP discovery — same embedded-gateway gap as the MCP bug (§12); the stdio/CLI entrypoints load plugins, the in-process gateway didn't.
+- **Local image serving:** new static mount `/eden/images` → `$HERMES_HOME/cache/images` (no token gate; loopback + non-secret, mirrors /eden/assets). `extractLinks` treats relative `/eden/images/...` as images (panel thumbnail, same-origin src); `sanitizeForSpeech` strips those paths from speech. Instruction v4: images via `image_generate`, append `/eden/images/FILENAME`; videos stay Higgsfield (full URL).
+- **`.env.example`:** OPENAI_API_KEY block (line ~132). Key lives in the project `.env` (user env doesn't have it — fallback fill applies). Key verified: full GPT-5.x line, gpt-image-2, **gpt-realtime-2 family, sora-2** all available.
+
+### Gates
+
+tsc 0 · 82 vitest · build 0 · 9 pytest · ws_smoke green (PONG via gpt-5.4-mini) · image turn end-to-end: `image_generate` → PNG → `/eden/images/...` → HTTP 200 (984 KB).
+
+### Notes / open
+
+- gpt-image-2 medium takes ~50s — the thinking fillers cover the wait, but expectation-setting in the spoken answer helps ("das dauert etwa eine Minute").
+- OpenRouter remains configured as fallback knowledge (config `providers` keeps the key); switch back = restore `model.provider: openrouter` + `model.default: anthropic/...`.
+- **Round 6 next:** OpenAI Realtime conversation mode (gpt-realtime-2 / -mini verified available on this key) with tool delegation to the Hermes turn loop.
+
