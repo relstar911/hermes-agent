@@ -4596,6 +4596,27 @@ def start_server(
                     discover_mcp_tools()
             except Exception:
                 _log.debug("MCP discovery at dashboard startup failed", exc_info=True)
+            # Agent browser: the browser tools attach via CDP to a running
+            # Chrome (browser.cdp_url). Launch one on its dedicated debug
+            # profile when the endpoint is down — otherwise every mission
+            # fails with "browser not connected" after the window is closed.
+            try:
+                import urllib.request as _ur
+
+                from hermes_cli.browser_connect import (
+                    DEFAULT_BROWSER_CDP_PORT,
+                    try_launch_chrome_debug,
+                )
+
+                try:
+                    _ur.urlopen(
+                        f"http://127.0.0.1:{DEFAULT_BROWSER_CDP_PORT}/json/version",
+                        timeout=2,
+                    )
+                except Exception:
+                    try_launch_chrome_debug(DEFAULT_BROWSER_CDP_PORT)
+            except Exception:
+                _log.debug("CDP chrome autostart failed", exc_info=True)
 
         threading.Thread(target=_discover_extensions, daemon=True, name="ext-discover").start()
 
