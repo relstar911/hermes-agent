@@ -11,7 +11,7 @@ export type SpeechChunk = string | { audio: ArrayBuffer };
  * the first plays while later ones synthesize (one-chunk prefetch).
  * stop() aborts the current audio and clears everything (new user turn).
  */
-export function useSpeechQueue(onError?: (err: unknown) => void) {
+export function useSpeechQueue(onError?: (err: unknown) => void, getLang?: () => string) {
   const [speaking, setSpeaking] = useState(false);
   const amplitudeRef = useRef(0);
   const ctxRef = useRef<AudioContext | null>(null);
@@ -21,6 +21,8 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const getLangRef = useRef(getLang);
+  getLangRef.current = getLang;
 
   const ensureCtx = useCallback((): AudioContext => {
     return (ctxRef.current ??= new (window.AudioContext ||
@@ -48,7 +50,7 @@ export function useSpeechQueue(onError?: (err: unknown) => void) {
     const res = await fetch("/api/eden/tts", {
       method: "POST",
       headers: { "content-type": "application/json", "x-hermes-session-token": token() },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, language: getLangRef.current?.() || undefined }),
     });
     if (!res.ok) throw new Error(`tts ${res.status}`);
     return URL.createObjectURL(await res.blob());

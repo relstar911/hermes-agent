@@ -47,8 +47,8 @@ export default function App() {
     fail(langRef.current === "de" ? "Sprachausgabe fehlgeschlagen." : "Voice output failed.");
   }, [fail]);
 
-  const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError);
-  const speakAck = useAcks(lang, ready, enqueue);
+  const { enqueue, stop: stopSpeech, speaking, amplitudeRef, prime } = useSpeechQueue(speechError, () => langRef.current);
+  const { speakAck, speakFiller: _speakFiller } = useAcks(lang, ready, enqueue);
   const speechBuf = useRef("");
   const spokeThisTurn = useRef(false);
   const awaitingTurnStart = useRef(false);
