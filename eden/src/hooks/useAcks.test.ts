@@ -62,8 +62,8 @@ describe("useAcks", () => {
       await Promise.resolve();
     });
     act(() => result.current());
-    const arg = enqueue.mock.calls[0][0];
-    expect(arg).toEqual({ audio: buf });
+    const arg = enqueue.mock.calls[0][0] as { audio: ArrayBuffer };
+    expect(arg.audio).toBe(buf); // identity: the exact prefetched buffer instance
   });
 
   it("rotates phrases — consecutive acks differ", async () => {
