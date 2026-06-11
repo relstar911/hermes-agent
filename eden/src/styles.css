@@ -103,3 +103,45 @@ html, body {
 .prompt-command { font: 400 12px/1.4 ui-monospace, monospace; color: #9fe7ff; opacity: .8; margin-top: 6px; word-break: break-all; }
 .prompt-choices { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
 .prompt-hint { margin-top: 12px; font: 400 10px/1 Inter, system-ui, sans-serif; letter-spacing: .1em; color: #5fb8d6; }
+
+/* ---- activity panel ---- */
+.activity {
+  position: fixed; z-index: 3; right: 18px; top: 110px; bottom: 170px;
+  width: min(330px, 30vw); pointer-events: auto; display: flex; flex-direction: column;
+}
+.activity-head {
+  cursor: pointer; user-select: none; font: 700 10px/1 ui-monospace, monospace;
+  letter-spacing: .3em; color: #7cf0ff; padding: 10px 12px;
+  border: 1px solid rgba(94,184,214,.3); border-radius: 12px;
+  background: rgba(8,24,38,.55); backdrop-filter: blur(8px);
+}
+.activity-head span { float: right; }
+.activity-body {
+  margin-top: 8px; overflow-y: auto; flex: 1; min-height: 0;
+  display: flex; flex-direction: column; gap: 10px; padding: 10px;
+  border: 1px solid rgba(94,184,214,.18); border-radius: 12px;
+  background: rgba(6,20,33,.5); backdrop-filter: blur(8px);
+  scrollbar-width: thin; scrollbar-color: rgba(94,184,214,.35) transparent;
+}
+.act-tool { font: 400 12px/1.45 Inter, system-ui, sans-serif; color: #cfeefb; }
+.act-name {
+  font: 600 10px/1.4 ui-monospace, monospace; letter-spacing: .14em; color: #8be9ff;
+  display: flex; gap: 6px; align-items: center;
+}
+.act-name .dot { width: 7px; height: 7px; border-radius: 50%; background: #38e1ff; box-shadow: 0 0 8px rgba(56,225,255,.8); flex: 0 0 auto; }
+.act-name .dot.running { animation: actpulse 1.1s ease-in-out infinite; }
+.act-name .dot.done { background: #7CFFB2; box-shadow: 0 0 8px rgba(124,255,178,.7); }
+.act-name .dot.error { background: #ff8484; box-shadow: 0 0 8px rgba(255,132,132,.7); }
+.act-dur { margin-left: auto; color: #5fb8d6; letter-spacing: 0; }
+.act-ctx, .act-prev, .act-sum { color: #9fc8da; opacity: .85; margin: 3px 0 0 13px; word-break: break-word; }
+.act-sum { color: #bfe9fb; }
+.act-turn { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.act-link {
+  font: 600 11px/1 Inter, system-ui, sans-serif; color: #8be9ff; text-decoration: none;
+  border: 1px solid rgba(94,184,214,.35); border-radius: 999px; padding: 5px 10px;
+}
+.act-link:hover { border-color: #38e1ff; color: #eafdff; }
+.act-thumb { max-width: 90px; max-height: 64px; border-radius: 8px; border: 1px solid rgba(94,184,214,.35); display: block; }
+.act-sep { flex-basis: 100%; border-top: 1px dashed rgba(94,184,214,.25); margin-top: 4px; }
+@keyframes actpulse { 50% { opacity: .35; } }
+@media (max-width: 980px) { .activity { display: none; } }
