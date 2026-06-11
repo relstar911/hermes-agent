@@ -282,7 +282,7 @@ export default function App() {
     setState("thinking");
     gwRef.current
       .request("prompt.submit", { session_id: sessionRef.current, text: VOICE_INSTRUCTION[langRef.current] + "\n\n" + text })
-      .catch(() => fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."));
+      .catch(() => { clearFillers(); fail(langRef.current === "de" ? "Anfrage fehlgeschlagen." : "Request failed."); });
   }, [addMsg, fail, stopSpeech, answerClarify, answerApproval, speakAck, speakFiller, clearFillers]);
 
   const onMicError = useCallback((code: string) => {
