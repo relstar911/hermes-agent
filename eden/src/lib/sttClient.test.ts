@@ -26,6 +26,8 @@ describe("transcribe", () => {
     expect(url).toContain("/api/eden/stt?language=de");
     expect(init.method).toBe("POST");
     expect(init.body).toBe(blob);
+    const headers = init.headers as Record<string, string>;
+    expect(headers["x-hermes-session-token"]).toBeDefined();
   });
 
   it("returns null on http error, network failure, and empty text", async () => {

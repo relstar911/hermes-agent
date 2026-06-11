@@ -19,6 +19,7 @@ class MockMediaRecorder {
   }
 }
 
+const originalStop = MockMediaRecorder.prototype.stop;
 const track = { enabled: true, stop: vi.fn() };
 const mockStream = { getAudioTracks: () => [track] };
 const getUserMedia = vi.fn(() => Promise.resolve(mockStream));
@@ -26,6 +27,7 @@ const getUserMedia = vi.fn(() => Promise.resolve(mockStream));
 beforeEach(() => {
   MockMediaRecorder.instances.length = 0;
   getUserMedia.mockClear();
+  MockMediaRecorder.prototype.stop = originalStop;
   vi.stubGlobal("MediaRecorder", MockMediaRecorder as unknown as typeof MediaRecorder);
   Object.defineProperty(navigator, "mediaDevices", {
     value: { getUserMedia },
