@@ -411,3 +411,26 @@ Run with `python -m hermes_cli.main dashboard --tui --no-open`, open `http://127
 - [ ] "Geh auf booking.com und such einen Flug nach Lissabon" → browser tools fire (visible in CDP Chrome + activity panel)
 - [ ] Generated image appears as thumbnail in the activity panel
 
+
+---
+
+## 14. Round 5 (2026-06-11): server-side STT via ElevenLabs Scribe
+
+**Spec:** `docs/eden/2026-06-11-voice-ux-round5-design.md` · user chose Scribe over local Whisper. Gates at HEAD: tsc 0 · **80 vitest** · build 0 · **9 pytest** · live WS smoke green.
+
+### What shipped
+
+- **`POST /api/eden/stt`** (mount_eden, mirrors the TTS route): raw audio body + optional `?language=` → ElevenLabs `scribe_v1` → `{"text"}`. Auth identical to TTS (self-authenticating, `_PUBLIC_API_PATHS`). 400 under 1 KB (accidental taps don''t bill), 503 without key, 502 on API failure. Key via the patchable module-level `_eden_stt_api_key()`.
+- **`useRecorder`**: MediaRecorder (webm/opus) during the PTT hold; mic stream acquired once on first hold and kept (`track.enabled` toggled) so later holds don''t clip the first word; <1 KB blobs discarded.
+- **`sttClient`**: `transcribe(blob, lang)` (8 s timeout, null on any failure) + pure `pickTranscript(scribe, fallback)`.
+- **App PTT flow**: Web Speech no longer submits — it only feeds the live interim display and a fallback buffer. PTT release → Scribe transcript wins; on failure the Web Speech final is used; both empty → "Nicht verstanden" note. `pttGen` generation guard abandons stale async work on rapid double-taps. Voice answers to clarify/approval prompts also go through Scribe.
+
+### Live verification
+
+TTS→STT roundtrip: synthesized "Öffne bitte den Browser und suche nach Flügen von Köln nach Lissabon." (61 902 bytes MP3) → Scribe returned the sentence **verbatim** (umlauts + proper nouns exact). Endpoint auth/size/key paths covered by 4 new pytest.
+
+### Notes
+
+- Chrome shows a persistent mic-in-use indicator after the first PTT (stream is kept) — accepted design tradeoff.
+- Scribe cost ≈ 0.4 ct/audio-minute on the existing ELEVENLABS_API_KEY.
+
